@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(*data/**)",
+      "Bash(**/data/**)",
+      "Read(data/**)",
+      "Read(*/data/**)"
+    ]
+  }
+}

@@ -71,6 +71,10 @@ CREATE TABLE transactions (
 3. `get_user_context()` — synthesized spend profile: typical amounts per category, top merchants
 4. `lookup_merchant(raw_string)` *(optional)* — normalize messy merchant strings via LLM
 
+## Off-limits
+
+Never read files under `data/`. This directory contains real personal financial data and is gitignored for that reason. Infer the CSV schema from the documentation in this file only. This applies to all tools: `Read`, `Bash` (`cat`, `head`, etc.), and any MCP file tools.
+
 ## Memory
 
 At the start of each session, read the project memory index and load any relevant memory files.
