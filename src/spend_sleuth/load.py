@@ -10,7 +10,7 @@ from .db import get_connection, init_schema
 def _compute_hash(row: pd.Series) -> str:
     key = "|".join(str(row[c]) for c in [
         "transaction_date", "posted_date", "card_no",
-        "description", "debit", "credit",
+        "description", "debit", "credit", "source_file", "file_row",
     ])
     return hashlib.sha256(key.encode()).hexdigest()
 
@@ -46,12 +46,13 @@ def load_csv(csv_path: Path, conn: duckdb.DuckDBPyConnection | None = None) -> i
     df["debit"]  = pd.to_numeric(df["debit"],  errors="coerce")
     df["credit"] = pd.to_numeric(df["credit"], errors="coerce")
     df["source_file"] = csv_path.name
+    df["file_row"] = range(len(df))
     df["row_hash"] = df.apply(_compute_hash, axis=1)
 
     rows_before = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
     conn.register("_staging", df[[
         "transaction_date", "posted_date", "card_no", "description",
-        "category", "debit", "credit", "source_file", "row_hash",
+        "category", "debit", "credit", "source_file", "file_row", "row_hash",
     ]])
     conn.execute("""
         INSERT INTO transactions

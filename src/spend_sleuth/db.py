@@ -19,6 +19,7 @@ def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
             debit            DECIMAL(10,2),
             credit           DECIMAL(10,2),
             source_file      VARCHAR,
+            file_row         INTEGER,
             row_hash         VARCHAR UNIQUE
         )
     """)
