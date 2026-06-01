@@ -250,7 +250,7 @@ else:
 
     def _render_candidate(c: dict) -> None:
         a, b = c["txn_a"], c["txn_b"]
-        key = a["row_hash"]
+        key = f"{a['row_hash']}_{b['row_hash']}"
         label = f"{c['normalized_merchant']}  —  ${a['debit']:.2f}  |  {c['days_apart']} day(s) apart"
         with st.expander(label, expanded=True):
             col_a, col_b = st.columns(2)
