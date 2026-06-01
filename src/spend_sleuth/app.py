@@ -234,15 +234,11 @@ else:
     omny = [c for c in candidates if c["is_omny"]]
     st.caption(f"{len(non_omny)} flagged pair(s)  |  {len(omny)} OMNY pair(s) (expected transit taps, shown for completeness)")
 
-    for c in candidates:
+    def _render_candidate(c: dict) -> None:
         a, b = c["txn_a"], c["txn_b"]
         key = a["row_hash"]
-        label = (
-            f"{'[OMNY] ' if c['is_omny'] else ''}"
-            f"{c['normalized_merchant']}  —  "
-            f"${a['debit']:.2f}  |  {c['days_apart']} day(s) apart"
-        )
-        with st.expander(label, expanded=not c["is_omny"]):
+        label = f"{c['normalized_merchant']}  —  ${a['debit']:.2f}  |  {c['days_apart']} day(s) apart"
+        with st.expander(label, expanded=True):
             col_a, col_b = st.columns(2)
             with col_a:
                 st.markdown("**Transaction A**")
@@ -251,14 +247,26 @@ else:
                 st.markdown("**Transaction B**")
                 st.write(b)
             st.caption(f"Amount diff: ${c['amount_diff']:.4f}  |  Normalized merchant: `{c['normalized_merchant']}`")
+            st.divider()
+            if st.button("Investigate", key=f"btn_{key}"):
+                with st.spinner("Running agent investigation…"):
+                    result = investigate(c, get_conn(), use_stub=use_stub)
+                st.session_state.investigations[key] = result
+            result = st.session_state.investigations.get(key)
+            if result:
+                _render_investigation(result)
 
-            if not c["is_omny"]:
+    for c in non_omny:
+        _render_candidate(c)
+
+    if omny:
+        with st.expander(f"OMNY transit taps ({len(omny)} pair(s) — expected duplicates)", expanded=False):
+            for c in omny:
+                a, b = c["txn_a"], c["txn_b"]
+                st.markdown(f"**{c['normalized_merchant']}** — ${a['debit']:.2f} | {c['days_apart']} day(s) apart")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.write(a)
+                with col_b:
+                    st.write(b)
                 st.divider()
-                if st.button("Investigate", key=f"btn_{key}"):
-                    with st.spinner("Running agent investigation…"):
-                        result = investigate(c, get_conn(), use_stub=use_stub)
-                    st.session_state.investigations[key] = result
-
-                result = st.session_state.investigations.get(key)
-                if result:
-                    _render_investigation(result)
