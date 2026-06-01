@@ -64,8 +64,16 @@ def normalize_merchant(description: str) -> str:
     return s
 
 
+_OMNY_PATTERNS = ("OMNY", "MTA*NYCT PAYGO")
+
+
+def _is_omny(description: str) -> bool:
+    upper = description.upper()
+    return any(p in upper for p in _OMNY_PATTERNS)
+
+
 def _is_omny_pair(desc_a: str, desc_b: str) -> bool:
-    return "OMNY" in desc_a.upper() and "OMNY" in desc_b.upper()
+    return _is_omny(desc_a) and _is_omny(desc_b)
 
 
 def find_duplicate_candidates(

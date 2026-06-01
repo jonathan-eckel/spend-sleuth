@@ -85,6 +85,17 @@ def test_flags_omny_pair(conn):
     assert results[0]["is_omny"] is True
 
 
+def test_flags_mta_nyct_paygo_as_omny(conn):
+    insert_transaction(conn, description="MTA*NYCT PAYGO", debit=2.90,
+                       transaction_date="2025-03-01", file_row=0)
+    insert_transaction(conn, description="MTA*NYCT PAYGO", debit=2.90,
+                       transaction_date="2025-03-01", file_row=1)
+
+    results = find_duplicate_candidates(conn)
+    assert len(results) == 1
+    assert results[0]["is_omny"] is True
+
+
 def test_date_range_filter(conn):
     insert_transaction(conn, description="AMAZON", debit=29.99,
                        transaction_date="2025-01-05", file_row=0)
