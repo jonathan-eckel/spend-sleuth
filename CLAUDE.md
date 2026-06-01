@@ -6,9 +6,9 @@ See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the full project plan, timeline, and 
 
 ## Current State
 
-Pre-Week-1. Data downloaded, no code written yet.
+End of Week 1. Vertical slice complete: detection → agent → Streamlit UI working end-to-end.
 
-## Stack (planned)
+## Stack
 
 | Layer | Choice |
 |---|---|
@@ -16,21 +16,33 @@ Pre-Week-1. Data downloaded, no code written yet.
 | Data store | DuckDB |
 | Ingestion | Pandas |
 | Agent framework | LangGraph |
-| LLM | Anthropic API (direct) |
+| LLM | Anthropic API (`langchain-anthropic` / `claude-sonnet-4-6`) |
 | Frontend | Streamlit |
-| Hosting | AWS App Runner |
-| Vector DB | Chroma (persistent) |
-| Evals | LangSmith or Braintrust (not yet integrated) |
+| Hosting | AWS App Runner (not yet deployed) |
+| Vector DB | Chroma (not yet integrated) |
+| Evals | Not yet integrated |
+| Tests | pytest |
 
-## Repo Structure (planned)
+## Repo Structure
 
 ```
-data/              ← raw CSVs (gitignored, sensitive)
+data/                        ← raw CSVs (gitignored, sensitive)
+demo_data/                   ← sanitized demo data (not yet populated)
 src/
   spend_sleuth/
-    db.py          ← DuckDB connection, schema init
-    load.py        ← CSV ingestion
-    cli.py         ← CLI entrypoint
+    db.py                    ← DuckDB connection, schema init
+    load.py                  ← CSV ingestion
+    detect.py                ← duplicate charge detection
+    cli.py                   ← CLI: load, stats, detect, investigate
+    app.py                   ← Streamlit app
+    agent/
+      tools.py               ← 3 LangGraph tools (query_history, recurring_pattern, user_context)
+      graph.py               ← LangGraph StateGraph (ReAct loop)
+      run.py                 ← investigate() entrypoint
+tests/
+  conftest.py                ← in-memory DuckDB fixture + insert_transaction helper
+  test_detect.py             ← 14 smoke tests for detection layer
+investigation_cache.json     ← persisted agent results (gitignored)
 ```
 
 ## Data
@@ -39,10 +51,10 @@ src/
 - Fields: `Transaction Date, Posted Date, Card No., Description, Category, Debit, Credit`
 - Debit and Credit are **separate columns** (not a signed amount field)
 - Merchant strings often include location codes: `TRADER JOE'S #123`, `SQ *`, `TST*`
-- OMNY transit taps look like duplicates (same date/amount/description) but are valid distinct charges
+- OMNY transit taps (`OMNY * MTA`, `MTA*NYCT PAYGO`) look like duplicates but are valid distinct charges
 - ~6-12 months of transactions across all cards
 
-## Planned DuckDB Schema
+## DuckDB Schema
 
 ```sql
 CREATE TABLE transactions (
@@ -54,22 +66,43 @@ CREATE TABLE transactions (
     debit            DECIMAL(10,2),
     credit           DECIMAL(10,2),
     source_file      VARCHAR,
+    file_row         INTEGER,
     row_hash         VARCHAR UNIQUE
 );
 ```
 
-## Alert Taxonomy (locked)
+`row_hash` = SHA-256 of `transaction_date|posted_date|card_no|description|debit|credit|source_file|file_row`. `file_row` is included so valid within-file duplicates (OMNY taps) are preserved.
 
-1. **Duplicate charge** — same/near-same amount, same merchant, within N days
-2. **Unusual amount for known merchant** — significant deviation from spend distribution
-3. **Forgotten subscription** — recurring charge with high temporal regularity
+## Alert Taxonomy
 
-## Agent Tools (planned)
+1. **Duplicate charge** ✅ — same/near-same amount, same merchant, within N days
+2. **Unusual amount for known merchant** — not yet implemented
+3. **Forgotten subscription** — not yet implemented
 
-1. `query_transaction_history(filters)` — search by merchant, category, date range, amount
-2. `get_recurring_pattern(merchant)` — detect recurring-charge pattern for a merchant
-3. `get_user_context()` — synthesized spend profile: typical amounts per category, top merchants
-4. `lookup_merchant(raw_string)` *(optional)* — normalize messy merchant strings via LLM
+## Agent Tools
+
+1. `query_transaction_history(merchant, days_back, min_amount, max_amount)` ✅ — search transactions by merchant substring
+2. `get_recurring_pattern(merchant)` ✅ — detect recurring-charge pattern (stddev/mean < 0.3 → regular)
+3. `get_user_context()` ✅ — top categories, top merchants, avg monthly spend
+4. `lookup_merchant(raw_string)` — optional, not yet implemented
+
+## CLI Commands
+
+```bash
+uv run spend-sleuth load <data_dir>          # ingest CSVs
+uv run spend-sleuth stats                    # row count, date range, by card
+uv run spend-sleuth detect [--window N] [--tolerance F] [--start DATE] [--end DATE]
+uv run spend-sleuth investigate [--stub|--no-stub] [--window N] [--start DATE] [--end DATE]
+uv run pytest                                # run test suite
+```
+
+## Streamlit App
+
+```bash
+uv run --env-file .env streamlit run src/spend_sleuth/app.py
+```
+
+Features: date range presets (30d/60d/90d/YTD), card/category/description filters, monthly spend chart, category breakdown, transaction table, duplicate candidates section with per-pair Investigate buttons. Investigation results cached to `investigation_cache.json`. Stub mode on by default; toggle off with `ANTHROPIC_API_KEY` set.
 
 ## Off-limits
 

@@ -2,7 +2,7 @@
 
 **Owner:** Jonathan Eckel
 **Time budget:** ~30-45 hours over 3 weeks (10-15 hrs/week)
-**Status:** Scoping and planning complete. Pre-week-1 work in progress.
+**Status:** Scoping and planning complete. Week-1 work in progress.
 
 ---
 
@@ -17,7 +17,7 @@ Alerting and investigation are different problems with different tooling needs.
 - **Detection layer (deterministic):** rules and simple classifiers find candidate anomalies. Fast, evaluable, no LLM needed. Deliberately minimal: its job is to produce realistic inputs for the agent, not to be a real anomaly detection system.
 - **Investigation layer (agentic):** for each candidate alert, an LLM agent decides what to look at, gathers context via tools, and synthesizes a structured explanation. This is where an agent earns its place: when the problem is "decide what to look up next, conditional on what you find."
 
-The README and demo writeup will explicitly argue this distinction. *Here's where the agent earns its place, and here's where it doesn't.* That argument is the primary credibility artifact for the on-paper LLM experience gap.
+The README and demo writeup will explicitly argue this distinction. *Here's where the agent earns its place, and here's where it doesn't.*
 
 ---
 
@@ -95,25 +95,23 @@ The `investigation_trace` is the demo differentiator. Most LLM demos hide the ag
 
 ## Plan
 
-### Pre-Week-1 (this week, 1-2 hrs)
-- Download 6-12 months of credit card data from bank.
-- Eyeball schema, transaction volume, merchant string quality.
-- Count rough natural occurrences per alert type (target: ≥3 each).
-- Plan synthetic anomaly injections for any gaps.
-- De-risks data unknowns before formal kickoff.
+### Pre-Week-1 ✅
+- Downloaded 6-12 months of credit card data.
+- Eyeballed schema, transaction volume, merchant string quality.
+- Identified OMNY transit taps as expected within-file duplicates.
 
-### Week 1: Vertical Slice + Foundations (10-12 hrs)
+### Week 1: Vertical Slice + Foundations ✅ (App Runner pending)
 
 *Goal: ugly end-to-end working locally, App Runner deploy attempted.*
 
-- Repo, dependencies, basic Streamlit shell. (1-2h)
-- Load real CC data into DuckDB, define schema, cleanup, inject synthetics. (3-4h)
-- Detection layer v0: one alert type only (duplicate charge, simplest). (1-2h)
-- Agent skeleton in LangGraph: one tool (`query_transaction_history`), basic loop, structured output. (2-3h)
-- Wire end-to-end: flagged transaction to agent to trace rendered in Streamlit. (1-2h)
-- First App Runner deploy attempt. (1-2h)
+- ✅ Repo, dependencies, uv project setup.
+- ✅ Load real CC data into DuckDB — schema with `file_row` to preserve valid within-file duplicates.
+- ✅ Detection layer v0: duplicate charge (`detect.py`, 14 pytest smoke tests).
+- ✅ Agent skeleton in LangGraph: all 3 tools (`query_transaction_history`, `get_recurring_pattern`, `get_user_context`), ReAct loop, structured output, stub mode.
+- ✅ Streamlit app: filters, charts, transaction table, duplicate candidates with Investigate buttons, agent trace rendering, disk-persisted investigation cache.
+- ⬜ First App Runner deploy attempt.
 
-**Checkpoint:** flagged transaction renders an agent trace, even if ugly. App Runner attempted, ideally working.
+**Checkpoint:** ✅ flagged transaction renders an agent trace. App Runner not yet attempted.
 
 ### Week 2: Depth + Completeness (10-12 hrs)
 
