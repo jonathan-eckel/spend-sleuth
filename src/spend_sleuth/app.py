@@ -100,8 +100,22 @@ st.sidebar.header("Filters")
 
 date_min = df["transaction_date"].min().date()
 date_max = df["transaction_date"].max().date()
-default_start = max(date_min, date_max - timedelta(days=60))
-date_range = st.sidebar.date_input("Date range", value=(default_start, date_max), min_value=date_min, max_value=date_max)
+
+if "date_range_start" not in st.session_state:
+    st.session_state.date_range_start = max(date_min, date_max - timedelta(days=60))
+
+_PRESETS = [("30d", 30), ("60d", 60), ("90d", 90)]
+preset_cols = st.sidebar.columns(len(_PRESETS))
+for col, (label, days) in zip(preset_cols, _PRESETS):
+    if col.button(label, use_container_width=True):
+        st.session_state.date_range_start = date_min if days is None else max(date_min, date_max - timedelta(days=days))
+
+date_range = st.sidebar.date_input(
+    "Date range",
+    value=(st.session_state.date_range_start, date_max),
+    min_value=date_min,
+    max_value=date_max,
+)
 
 cards = ["All"] + sorted(df["card_no"].dropna().unique().tolist())
 selected_card = st.sidebar.selectbox("Card", cards)
