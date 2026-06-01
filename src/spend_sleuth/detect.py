@@ -100,6 +100,7 @@ def find_duplicate_candidates(
             continue
 
         candidates.append({
+            "alert_type": "duplicate",
             "normalized_merchant": norm_a,
             "days_apart": int(row.days_apart),
             "amount_diff": float(row.amount_diff),

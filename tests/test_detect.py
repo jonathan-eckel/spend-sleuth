@@ -38,6 +38,7 @@ def test_finds_exact_duplicate(conn):
 
     results = find_duplicate_candidates(conn)
     assert len(results) == 1
+    assert results[0]["alert_type"] == "duplicate"
     assert results[0]["normalized_merchant"] == "TRADER JOE'S"
     assert results[0]["days_apart"] == 2
     assert results[0]["amount_diff"] == 0.0
