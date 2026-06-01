@@ -1,14 +1,29 @@
 import json
 import os
 from datetime import timedelta
+from pathlib import Path
 import streamlit as st
 import pandas as pd
 import altair as alt
-from pathlib import Path
 
 from spend_sleuth.db import get_connection, DB_PATH
 from spend_sleuth.detect import find_duplicate_candidates
 from spend_sleuth.agent.run import investigate
+
+_CACHE_PATH = DB_PATH.parent / "investigation_cache.json"
+
+
+def _load_cache() -> dict:
+    if _CACHE_PATH.exists():
+        try:
+            return json.loads(_CACHE_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_cache(cache: dict) -> None:
+    _CACHE_PATH.write_text(json.dumps(cache, default=str, indent=2))
 
 
 @st.cache_resource
@@ -244,7 +259,7 @@ st.divider()
 st.subheader("Duplicate Charge Candidates")
 
 if "investigations" not in st.session_state:
-    st.session_state.investigations = {}
+    st.session_state.investigations = _load_cache()
 
 candidates = load_duplicate_candidates(
     date_range[0] if len(date_range) == 2 else date_min,
@@ -275,13 +290,21 @@ else:
                 st.write(b)
             st.caption(f"Amount diff: ${c['amount_diff']:.4f}  |  Normalized merchant: `{c['normalized_merchant']}`")
             st.divider()
-            if st.button("Investigate", key=f"btn_{key}"):
-                with st.spinner("Running agent investigation…"):
-                    result = investigate(c, get_conn(), use_stub=use_stub)
-                st.session_state.investigations[key] = result
-            result = st.session_state.investigations.get(key)
-            if result:
-                _render_investigation(result)
+            cached = st.session_state.investigations.get(key)
+            if cached:
+                st.caption("_Showing cached result — click Re-investigate to re-run._")
+                if st.button("Re-investigate", key=f"btn_{key}"):
+                    with st.spinner("Running agent investigation…"):
+                        result = investigate(c, get_conn(), use_stub=use_stub)
+                    st.session_state.investigations[key] = result
+                    _save_cache(st.session_state.investigations)
+                _render_investigation(cached)
+            else:
+                if st.button("Investigate", key=f"btn_{key}"):
+                    with st.spinner("Running agent investigation…"):
+                        result = investigate(c, get_conn(), use_stub=use_stub)
+                    st.session_state.investigations[key] = result
+                    _save_cache(st.session_state.investigations)
 
     for c in non_omny:
         _render_candidate(c)

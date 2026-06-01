@@ -4,6 +4,7 @@ data/
 scratch/
 memory/
 MEMORY.md
+investigation_cache.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
