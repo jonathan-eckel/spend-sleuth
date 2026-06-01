@@ -4,11 +4,17 @@ import altair as alt
 from pathlib import Path
 
 from spend_sleuth.db import get_connection, DB_PATH
+from spend_sleuth.detect import find_duplicate_candidates
 
 
 @st.cache_resource
 def get_conn():
-    return get_connection(DB_PATH)
+    return get_connection(DB_PATH, read_only=True)
+
+
+@st.cache_data
+def load_duplicate_candidates(start_date, end_date) -> list[dict]:
+    return find_duplicate_candidates(get_conn(), start_date=start_date, end_date=end_date)
 
 
 @st.cache_data
@@ -142,3 +148,37 @@ st.dataframe(
         "Credit": st.column_config.NumberColumn(format="$%.2f"),
     },
 )
+
+st.divider()
+
+# --- Duplicate charge candidates ---
+st.subheader("Duplicate Charge Candidates")
+
+candidates = load_duplicate_candidates(
+    date_range[0] if len(date_range) == 2 else date_min,
+    date_range[1] if len(date_range) == 2 else date_max,
+)
+
+if not candidates:
+    st.info("No duplicate candidates detected.")
+else:
+    non_omny = [c for c in candidates if not c["is_omny"]]
+    omny = [c for c in candidates if c["is_omny"]]
+    st.caption(f"{len(non_omny)} flagged pair(s)  |  {len(omny)} OMNY pair(s) (expected transit taps, shown for completeness)")
+
+    for c in candidates:
+        a, b = c["txn_a"], c["txn_b"]
+        label = (
+            f"{'[OMNY] ' if c['is_omny'] else ''}"
+            f"{c['normalized_merchant']}  —  "
+            f"${a['debit']:.2f}  |  {c['days_apart']} day(s) apart"
+        )
+        with st.expander(label, expanded=not c["is_omny"]):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("**Transaction A**")
+                st.write(a)
+            with col_b:
+                st.markdown("**Transaction B**")
+                st.write(b)
+            st.caption(f"Amount diff: ${c['amount_diff']:.4f}  |  Normalized merchant: `{c['normalized_merchant']}`")

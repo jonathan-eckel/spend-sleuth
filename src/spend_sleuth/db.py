@@ -4,8 +4,8 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent.parent.parent / "spend_sleuth.db"
 
 
-def get_connection(db_path: Path = DB_PATH) -> duckdb.DuckDBPyConnection:
-    return duckdb.connect(str(db_path))
+def get_connection(db_path: Path = DB_PATH, read_only: bool = False) -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(str(db_path), read_only=read_only)
 
 
 def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
