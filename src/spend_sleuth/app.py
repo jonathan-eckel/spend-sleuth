@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import timedelta
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -99,7 +100,8 @@ st.sidebar.header("Filters")
 
 date_min = df["transaction_date"].min().date()
 date_max = df["transaction_date"].max().date()
-date_range = st.sidebar.date_input("Date range", value=(date_min, date_max), min_value=date_min, max_value=date_max)
+default_start = max(date_min, date_max - timedelta(days=60))
+date_range = st.sidebar.date_input("Date range", value=(default_start, date_max), min_value=date_min, max_value=date_max)
 
 cards = ["All"] + sorted(df["card_no"].dropna().unique().tolist())
 selected_card = st.sidebar.selectbox("Card", cards)
