@@ -1,3 +1,5 @@
+import json
+import os
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -5,6 +7,7 @@ from pathlib import Path
 
 from spend_sleuth.db import get_connection, DB_PATH
 from spend_sleuth.detect import find_duplicate_candidates
+from spend_sleuth.agent.run import investigate
 
 
 @st.cache_resource
@@ -38,6 +41,54 @@ def load_transactions() -> pd.DataFrame:
     return df
 
 
+_VERDICT_COLOR = {
+    "benign": "green",
+    "suspicious": "red",
+    "needs_review": "orange",
+}
+_ACTION_EMOJI = {
+    "dismiss": "✓",
+    "review": "⚠",
+    "dispute": "✗",
+}
+
+
+def _render_investigation(result: dict) -> None:
+    verdict = result.get("verdict", "unknown")
+    color = _VERDICT_COLOR.get(verdict, "gray")
+    action = result.get("recommended_action", "")
+    action_emoji = _ACTION_EMOJI.get(action, "")
+
+    st.markdown(
+        f"**Verdict:** :{color}[{verdict.upper()}]  &nbsp;&nbsp; "
+        f"**Confidence:** {result.get('confidence', 0):.0%}  &nbsp;&nbsp; "
+        f"**Action:** {action_emoji} {action}"
+    )
+    st.markdown(f"_{result.get('explanation', '')}_")
+
+    evidence = result.get("evidence", [])
+    if evidence:
+        st.markdown("**Evidence:**")
+        for e in evidence:
+            st.markdown(f"- {e}")
+
+    trace = result.get("investigation_trace", [])
+    if trace:
+        with st.expander(f"Agent trace ({len(trace)} tool call(s))", expanded=False):
+            for step in trace:
+                st.markdown(f"**`{step['tool']}`**")
+                col_in, col_out = st.columns(2)
+                with col_in:
+                    st.caption("Input")
+                    st.json(step.get("input", {}))
+                with col_out:
+                    st.caption("Output")
+                    try:
+                        st.json(json.loads(step.get("output") or "null"))
+                    except (json.JSONDecodeError, TypeError):
+                        st.text(step.get("output", ""))
+
+
 st.set_page_config(page_title="Spend Sleuth", layout="wide")
 st.title("Spend Sleuth")
 
@@ -57,6 +108,18 @@ categories = ["All"] + sorted(df["category"].dropna().unique().tolist())
 selected_category = st.sidebar.selectbox("Category", categories)
 
 search = st.sidebar.text_input("Search description")
+
+st.sidebar.divider()
+st.sidebar.header("Agent")
+has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+use_stub = st.sidebar.toggle(
+    "Stub mode",
+    value=not has_api_key,
+    help="Use a fake LLM (no API key needed). Disable to use claude-sonnet-4-6.",
+    disabled=not has_api_key,
+)
+if not has_api_key:
+    st.sidebar.caption("Set ANTHROPIC_API_KEY to enable live mode.")
 
 # --- Apply filters ---
 mask = (
@@ -154,6 +217,9 @@ st.divider()
 # --- Duplicate charge candidates ---
 st.subheader("Duplicate Charge Candidates")
 
+if "investigations" not in st.session_state:
+    st.session_state.investigations = {}
+
 candidates = load_duplicate_candidates(
     date_range[0] if len(date_range) == 2 else date_min,
     date_range[1] if len(date_range) == 2 else date_max,
@@ -168,6 +234,7 @@ else:
 
     for c in candidates:
         a, b = c["txn_a"], c["txn_b"]
+        key = a["row_hash"]
         label = (
             f"{'[OMNY] ' if c['is_omny'] else ''}"
             f"{c['normalized_merchant']}  —  "
@@ -182,3 +249,14 @@ else:
                 st.markdown("**Transaction B**")
                 st.write(b)
             st.caption(f"Amount diff: ${c['amount_diff']:.4f}  |  Normalized merchant: `{c['normalized_merchant']}`")
+
+            if not c["is_omny"]:
+                st.divider()
+                if st.button("Investigate", key=f"btn_{key}"):
+                    with st.spinner("Running agent investigation…"):
+                        result = investigate(c, get_conn(), use_stub=use_stub)
+                    st.session_state.investigations[key] = result
+
+                result = st.session_state.investigations.get(key)
+                if result:
+                    _render_investigation(result)
