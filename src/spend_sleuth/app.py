@@ -298,6 +298,7 @@ else:
                         result = investigate(c, get_conn(), use_stub=use_stub)
                     st.session_state.investigations[key] = result
                     _save_cache(st.session_state.investigations)
+                    st.rerun()
                 _render_investigation(cached)
             else:
                 if st.button("Investigate", key=f"btn_{key}"):
@@ -305,6 +306,7 @@ else:
                         result = investigate(c, get_conn(), use_stub=use_stub)
                     st.session_state.investigations[key] = result
                     _save_cache(st.session_state.investigations)
+                    st.rerun()
 
     for c in non_omny:
         _render_candidate(c)
