@@ -21,3 +21,8 @@ spend-sleuth = "spend_sleuth.cli:cli"
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
