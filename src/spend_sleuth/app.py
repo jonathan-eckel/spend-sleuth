@@ -292,7 +292,6 @@ else:
             st.divider()
             cached = st.session_state.investigations.get(key)
             if cached:
-                st.caption("_Showing cached result — click Re-investigate to re-run._")
                 if st.button("Re-investigate", key=f"btn_{key}"):
                     with st.spinner("Running agent investigation…"):
                         result = investigate(c, get_conn(), use_stub=use_stub)
