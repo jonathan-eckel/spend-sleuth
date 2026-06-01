@@ -1,3 +1,5 @@
+import json
+import os
 import click
 from datetime import date
 from pathlib import Path
@@ -94,3 +96,49 @@ def detect(db: Path | None, window: int, tolerance: float, start, end):
             f"     B: {b['transaction_date']}  ${b['debit']:.2f}  {b['description']}\n"
             f"     Days apart: {c['days_apart']}  |  Amount diff: ${c['amount_diff']:.2f}\n"
         )
+
+
+@cli.command()
+@click.option("--db", type=click.Path(path_type=Path), default=None)
+@click.option("--window", default=7, show_default=True, help="Days window for duplicate detection.")
+@click.option("--tolerance", default=0.01, show_default=True, help="Amount tolerance ($).")
+@click.option("--start", type=click.DateTime(formats=["%Y-%m-%d"]), default=None, help="Start date (YYYY-MM-DD).")
+@click.option("--end", type=click.DateTime(formats=["%Y-%m-%d"]), default=None, help="End date (YYYY-MM-DD).")
+@click.option("--stub/--no-stub", default=None, help="Use stub LLM (default: auto-detect from ANTHROPIC_API_KEY).")
+def investigate(db: Path | None, window: int, tolerance: float, start, end, stub: bool | None):
+    """Investigate the first duplicate charge candidate with the agent."""
+    from .agent.run import investigate as run_investigate
+
+    use_stub = stub if stub is not None else not bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    db_path = db or DB_PATH
+    conn = get_connection(db_path, read_only=True)
+    start_date = start.date() if start else None
+    end_date = end.date() if end else None
+
+    try:
+        candidates = find_duplicate_candidates(
+            conn, window_days=window, amount_tolerance=tolerance,
+            start_date=start_date, end_date=end_date,
+        )
+        non_omny = [c for c in candidates if not c["is_omny"]]
+        if not non_omny:
+            click.echo("No non-OMNY duplicate candidates found to investigate.")
+            return
+
+        candidate = non_omny[0]
+        mode = "stub" if use_stub else "live (claude-sonnet-4-6)"
+        click.echo(f"Investigating: {candidate['normalized_merchant']}  [{mode}]\n")
+
+        result = run_investigate(candidate, conn, use_stub=use_stub)
+    finally:
+        conn.close()
+
+    click.echo(f"Verdict          : {result['verdict']}  (confidence: {result['confidence']:.2f})")
+    click.echo(f"Recommended action: {result['recommended_action']}")
+    click.echo(f"Explanation      : {result['explanation']}\n")
+    click.echo("Evidence:")
+    for e in result.get("evidence", []):
+        click.echo(f"  - {e}")
+    click.echo("\nInvestigation trace:")
+    click.echo(json.dumps(result["investigation_trace"], indent=2, default=str))
