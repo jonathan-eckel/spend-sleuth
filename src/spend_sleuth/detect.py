@@ -82,15 +82,32 @@ def find_duplicate_candidates(
     amount_tolerance: float = 0.01,
     start_date: date | None = None,
     end_date: date | None = None,
+    card_no: str | None = None,
+    category: str | None = None,
+    description_search: str | None = None,
 ) -> list[dict]:
     if start_date is None:
         start_date = conn.execute("SELECT MIN(transaction_date) FROM transactions").fetchone()[0]
     if end_date is None:
         end_date = conn.execute("SELECT MAX(transaction_date) FROM transactions").fetchone()[0]
 
-    df: pd.DataFrame = conn.execute(
-        _CANDIDATES_SQL, [start_date, end_date, amount_tolerance, window_days]
-    ).df()
+    extra_clauses = ""
+    params = [start_date, end_date]
+    if card_no:
+        extra_clauses += " AND card_no = ?"
+        params.append(card_no)
+    if category:
+        extra_clauses += " AND category = ?"
+        params.append(category)
+    if description_search:
+        extra_clauses += " AND UPPER(description) LIKE UPPER(?)"
+        params.append(f"%{description_search}%")
+    params += [amount_tolerance, window_days]
+
+    sql = _CANDIDATES_SQL.replace("WHERE transaction_date BETWEEN ? AND ?",
+                                  f"WHERE transaction_date BETWEEN ? AND ?{extra_clauses}")
+
+    df: pd.DataFrame = conn.execute(sql, params).df()
 
     candidates = []
     for row in df.itertuples(index=False):

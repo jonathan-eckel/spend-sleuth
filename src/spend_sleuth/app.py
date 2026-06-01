@@ -17,8 +17,15 @@ def get_conn():
 
 
 @st.cache_data
-def load_duplicate_candidates(start_date, end_date) -> list[dict]:
-    return find_duplicate_candidates(get_conn(), start_date=start_date, end_date=end_date)
+def load_duplicate_candidates(start_date, end_date, card_no, category, description_search) -> list[dict]:
+    return find_duplicate_candidates(
+        get_conn(),
+        start_date=start_date,
+        end_date=end_date,
+        card_no=card_no or None,
+        category=category or None,
+        description_search=description_search or None,
+    )
 
 
 @st.cache_data
@@ -239,6 +246,9 @@ if "investigations" not in st.session_state:
 candidates = load_duplicate_candidates(
     date_range[0] if len(date_range) == 2 else date_min,
     date_range[1] if len(date_range) == 2 else date_max,
+    selected_card if selected_card != "All" else "",
+    selected_category if selected_category != "All" else "",
+    search,
 )
 
 if not candidates:
