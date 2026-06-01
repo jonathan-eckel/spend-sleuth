@@ -6,9 +6,9 @@ import pandas as pd
 _PREFIX_PATTERNS = [
     r"^SQ \*",
     r"^TST\*",
-    r"^AUT \*",
-    r"^PP\*",
-    r"^AMZN MKTP",
+    # r"^AUT \*",
+    # r"^PP\*",
+    # r"^AMZN MKTP",
 ]
 _STORE_NUMBER = r"\s*#\w+$"
 
