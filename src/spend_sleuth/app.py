@@ -155,7 +155,7 @@ st.sidebar.header("Agent")
 has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
 use_stub = st.sidebar.toggle(
     "Stub mode",
-    value=not has_api_key,
+    value=True,
     help="Use a fake LLM (no API key needed). Disable to use claude-sonnet-4-6.",
     disabled=not has_api_key,
 )
