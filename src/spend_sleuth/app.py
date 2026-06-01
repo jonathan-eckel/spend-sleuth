@@ -111,11 +111,14 @@ date_max = df["transaction_date"].max().date()
 if "date_range_start" not in st.session_state:
     st.session_state.date_range_start = max(date_min, date_max - timedelta(days=60))
 
-_PRESETS = [("30d", 30), ("60d", 60), ("90d", 90)]
+_PRESETS = [("30d", 30), ("60d", 60), ("90d", 90), ("YTD", "ytd")]
 preset_cols = st.sidebar.columns(len(_PRESETS))
 for col, (label, days) in zip(preset_cols, _PRESETS):
     if col.button(label, use_container_width=True):
-        st.session_state.date_range_start = date_min if days is None else max(date_min, date_max - timedelta(days=days))
+        if days == "ytd":
+            st.session_state.date_range_start = date_max.replace(month=1, day=1)
+        else:
+            st.session_state.date_range_start = max(date_min, date_max - timedelta(days=days))
 
 date_range = st.sidebar.date_input(
     "Date range",
