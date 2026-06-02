@@ -1,0 +1,18 @@
+# Real financial data — never in the image
+data/
+
+# Local dev artifacts
+spend_sleuth.db
+investigation_cache.json
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+scratch/
+memory/
+
+# Repo metadata
+.git/
+.gitignore
+.claude/
+tests/

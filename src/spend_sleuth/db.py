@@ -1,7 +1,9 @@
+import os
 import duckdb
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent.parent / "spend_sleuth.db"
+_DEFAULT_DB = Path(__file__).parent.parent.parent / "spend_sleuth.db"
+DB_PATH = Path(os.environ["SPEND_SLEUTH_DB"]) if "SPEND_SLEUTH_DB" in os.environ else _DEFAULT_DB
 
 
 def get_connection(db_path: Path = DB_PATH, read_only: bool = False) -> duckdb.DuckDBPyConnection:
