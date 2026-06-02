@@ -109,9 +109,9 @@ The `investigation_trace` is the demo differentiator. Most LLM demos hide the ag
 - ✅ Detection layer v0: duplicate charge (`detect.py`, 14 pytest smoke tests).
 - ✅ Agent skeleton in LangGraph: all 3 tools (`query_transaction_history`, `get_recurring_pattern`, `get_user_context`), ReAct loop, structured output, stub mode.
 - ✅ Streamlit app: filters, charts, transaction table, duplicate candidates with Investigate buttons, agent trace rendering, disk-persisted investigation cache.
-- ⬜ First App Runner deploy attempt.
+- ✅ First ECS Express Mode deploy — live at https://sp-0eda680669f042eb984dcb2b23e5b54f.ecs.us-east-2.on.aws/
 
-**Checkpoint:** ✅ flagged transaction renders an agent trace. App Runner not yet attempted.
+**Checkpoint:** ✅ flagged transaction renders an agent trace. ✅ Live public URL on ECS Express Mode.
 
 ### Week 2: Depth + Completeness (10-12 hrs)
 
