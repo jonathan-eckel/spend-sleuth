@@ -6,9 +6,9 @@ ECR_URI     := $(AWS_ACCOUNT).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO)
 
 .PHONY: build run ecr-create ecr-login push deploy
 
-## Build the Docker image locally
+## Build the Docker image locally (linux/amd64 for Fargate compatibility)
 build:
-	docker build -t $(ECR_REPO):$(IMAGE_TAG) .
+	docker build --platform linux/amd64 -t $(ECR_REPO):$(IMAGE_TAG) .
 
 ## Run the container locally (stub mode, no API key needed)
 run:
