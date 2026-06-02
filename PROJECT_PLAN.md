@@ -64,12 +64,12 @@ The `investigation_trace` is the demo differentiator. Most LLM demos hide the ag
 | Layer | Choice |
 |---|---|
 | Frontend | Streamlit |
-| Hosting | AWS App Runner |
+| Hosting | AWS ECS Express Mode |
 | LLM provider | Anthropic API (direct) |
 | Agent framework | LangGraph |
 | Vector DB | Chroma (persistent) |
 | Data store | DuckDB |
-| Secrets | AWS Secrets Manager or App Runner env vars |
+| Secrets | AWS Secrets Manager or ECS env vars |
 
 ## Data
 
@@ -132,7 +132,7 @@ The `investigation_trace` is the demo differentiator. Most LLM demos hide the ag
 - Eval comparison experiment (e.g., agent with all tools vs ablation). This is the differentiator. (3h)
 - Curate and sanitize demo dataset (3-5 transactions, one per alert type minimum). (2h)
 - Demo polish: trace rendering UX, eval page, landing copy. (3h)
-- Final App Runner deploy: domain, SSL, env vars/secrets, log streaming. (2-3h)
+- Final ECS Express Mode deploy: domain, SSL, env vars/secrets, log streaming. (2-3h)
 - README and LinkedIn-ready writeup, leading with the architectural argument. (2h)
 - Practice 60-second and 5-minute walkthroughs out loud. (1h)
 
