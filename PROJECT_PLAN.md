@@ -152,6 +152,12 @@ The `investigation_trace` is the demo differentiator. Most LLM demos hide the ag
 
 ---
 
+## Known Limitations / Future Work
+
+- **Merchant normalization coverage is ~24%.** As of Week 2, 24% of transactions are covered by merged canonical groups (fuzzy clustering at threshold 0.80) and 13% by regex normalization alone. This is acceptable for a demo but leaves a meaningful portion of transactions ungrouped. Future options: lower `_CANONICAL_THRESHOLD`, add more prefix patterns to `normalize_merchant()`, or explore a learned merchant-name embedding approach.
+
+---
+
 ## Operating Rules
 
 - End-of-week check-in: what landed, what slipped, what changed.
