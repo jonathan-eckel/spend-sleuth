@@ -140,6 +140,7 @@ def normalization_report(db: Path | None, threshold: float, show_all: bool):
             GROUP BY description
             ORDER BY description
         """).fetchall()
+        canonical_map = build_canonical_merchant_map(conn, threshold=threshold)
     finally:
         conn.close()
 
@@ -153,7 +154,6 @@ def normalization_report(db: Path | None, threshold: float, show_all: bool):
         key_data[key]["variants"].append((desc, n))
 
     # Cluster using the same function detection uses — report always matches detection
-    canonical_map = build_canonical_merchant_map(conn, threshold=threshold)
     clusters: dict[str, list[str]] = defaultdict(list)
     for norm_key, canonical in canonical_map.items():
         clusters[canonical].append(norm_key)
