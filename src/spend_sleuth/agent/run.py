@@ -46,7 +46,7 @@ def investigate(
         }
 
     return {
-        "transaction": candidate["txn_a"],
+        "transaction": candidate.get("txn_a") or candidate.get("transaction"),
         "alert_type": candidate["alert_type"],
         "investigation_trace": final_state.get("investigation_trace", []),
         **verdict,
