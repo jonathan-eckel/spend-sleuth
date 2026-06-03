@@ -163,25 +163,25 @@ def normalization_report(db: Path | None, threshold: float, show_all: bool):
     def cluster_count(rep: str) -> int:
         return sum(key_data[k]["count"] for k in clusters[rep])
 
-    issues = {rep: members for rep, members in clusters.items() if len(members) > 1}
+    merged = {rep: members for rep, members in clusters.items() if len(members) > 1}
     singletons = {rep: members for rep, members in clusters.items() if len(members) == 1}
 
     click.echo(f"Fuzzy similarity threshold: {threshold}\n")
 
-    # --- Potential grouping issues ---
-    if not issues:
-        click.echo("No potential grouping issues found.")
+    # --- Canonical merchant groups (merged by canonical map) ---
+    if not merged:
+        click.echo("No merchant variants being merged (all names are already distinct).")
     else:
-        hidden_note = f"  |  {len(singletons)} clean merchant(s) not shown (use --all)" if not show_all else ""
-        click.echo(f"Found {len(issues)} potential grouping issue(s){hidden_note}\n")
-        for rep in sorted(issues, key=cluster_count, reverse=True):
-            members = issues[rep]
+        hidden_note = f"  |  {len(singletons)} unmerged merchant(s) not shown (use --all)" if not show_all else ""
+        click.echo(f"{len(merged)} canonical merchant group(s) being merged automatically{hidden_note}\n")
+        for rep in sorted(merged, key=cluster_count, reverse=True):
+            members = merged[rep]
             total = cluster_count(rep)
-            label = "  /  ".join(members)
-            click.echo(f"[?] {label}  ({total} txns across {len(members)} normalized keys)")
+            click.echo(f"[canonical: {rep}]  ({total} txns, {len(members)} normalized variants)")
             for key in members:
                 d = key_data[key]
-                click.echo(f"    {key}  ({d['count']} txns)")
+                marker = " *" if key == rep else ""
+                click.echo(f"    {key}{marker}  ({d['count']} txns)")
                 for raw, n in sorted(d["variants"], key=lambda x: x[1], reverse=True):
                     click.echo(f"        {raw}  ({n})")
             click.echo()
