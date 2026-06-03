@@ -1,5 +1,5 @@
 import re
-from datetime import date
+from datetime import date, timedelta
 import duckdb
 import pandas as pd
 
@@ -64,7 +64,67 @@ def normalize_merchant(description: str) -> str:
     return s
 
 
+_MIN_UNUSUAL_DELTA: float = 10.0   # minimum absolute $ above historical mean to flag; tune after review
+_CANONICAL_THRESHOLD: float = 0.80  # fuzzy similarity cutoff for merchant clustering
+
 _OMNY_PATTERNS = ("OMNY", "MTA*NYCT PAYGO")
+
+
+def build_canonical_merchant_map(
+    conn: duckdb.DuckDBPyConnection,
+    threshold: float = _CANONICAL_THRESHOLD,
+) -> dict[str, str]:
+    """Return {normalized_key → canonical_name} via fuzzy clustering.
+
+    Canonical name = highest-transaction-count normalized key in each cluster.
+    Merchants with no similar peers map to themselves (identity mapping).
+    """
+    from collections import defaultdict
+    from difflib import SequenceMatcher
+
+    rows = conn.execute("""
+        SELECT description, COUNT(*) AS n
+        FROM transactions
+        WHERE debit IS NOT NULL AND debit > 0
+        GROUP BY description
+    """).fetchall()
+
+    key_counts: dict[str, int] = {}
+    for desc, n in rows:
+        key = normalize_merchant(desc)
+        key_counts[key] = key_counts.get(key, 0) + n
+
+    keys = list(key_counts.keys())
+    parent = {k: k for k in keys}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: str, y: str) -> None:
+        px, py = find(x), find(y)
+        if px != py:
+            parent[py] = px  # root is arbitrary; canonical chosen after clustering
+
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            if SequenceMatcher(None, keys[i], keys[j]).ratio() >= threshold:
+                union(keys[i], keys[j])
+
+    # Group by cluster root, then pick the highest-count key as canonical
+    clusters: dict[str, list[str]] = defaultdict(list)
+    for k in keys:
+        clusters[find(k)].append(k)
+
+    canonical_map: dict[str, str] = {}
+    for members in clusters.values():
+        canonical = max(members, key=lambda k: key_counts[k])
+        for k in members:
+            canonical_map[k] = canonical
+
+    return canonical_map
 
 
 def _is_omny(description: str) -> bool:
@@ -108,11 +168,16 @@ def find_duplicate_candidates(
                                   f"WHERE transaction_date BETWEEN ? AND ?{extra_clauses}")
 
     df: pd.DataFrame = conn.execute(sql, params).df()
+    canonical_map = build_canonical_merchant_map(conn)
+
+    def _canonical(desc: str) -> str:
+        key = normalize_merchant(desc)
+        return canonical_map.get(key, key)
 
     candidates = []
     for row in df.itertuples(index=False):
-        norm_a = normalize_merchant(row.a_description)
-        norm_b = normalize_merchant(row.b_description)
+        norm_a = _canonical(row.a_description)
+        norm_b = _canonical(row.b_description)
         if norm_a != norm_b:
             continue
 
@@ -149,3 +214,121 @@ def find_duplicate_candidates(
         })
 
     return sorted(candidates, key=lambda c: c["txn_a"]["transaction_date"], reverse=True)
+
+
+def find_unusual_amount_candidates(
+    conn: duckdb.DuckDBPyConnection,
+    z_threshold: float = 2.0,
+    min_history: int = 5,
+    min_delta: float = _MIN_UNUSUAL_DELTA,
+    lookback_days: int = 365,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    card_no: str | None = None,
+    category: str | None = None,
+    description_search: str | None = None,
+) -> list[dict]:
+    """Find transactions where the amount is unusually high for a known merchant.
+
+    A merchant is "known" if it has at least `min_history` transactions in the
+    lookback window. Anomaly scoring uses z-score (high-side only); swap this
+    step to use IQR or MAD by replacing the z_score computation and threshold
+    comparison below.
+    """
+    if start_date is None:
+        start_date = conn.execute("SELECT MIN(transaction_date) FROM transactions").fetchone()[0]
+    if end_date is None:
+        end_date = conn.execute("SELECT MAX(transaction_date) FROM transactions").fetchone()[0]
+
+    lookback_start = end_date - timedelta(days=lookback_days)
+    canonical_map = build_canonical_merchant_map(conn)
+
+    def _canonical(desc: str) -> str:
+        key = normalize_merchant(desc)
+        return canonical_map.get(key, key)
+
+    # --- Build merchant stats from the full lookback window (no card/category filters) ---
+    history_df: pd.DataFrame = conn.execute("""
+        SELECT description, CAST(debit AS DOUBLE) AS debit
+        FROM transactions
+        WHERE transaction_date BETWEEN ? AND ?
+          AND debit IS NOT NULL AND debit > 0
+    """, [lookback_start, end_date]).df()
+
+    stats_map: dict[str, dict] = {}
+    for merchant_key, group in history_df.assign(
+        merchant_key=history_df["description"].map(_canonical)
+    ).groupby("merchant_key")["debit"]:
+        n = len(group)
+        if n < min_history:
+            continue
+        mean = float(group.mean())
+        stddev = float(group.std(ddof=0))
+        if stddev <= 0:
+            continue
+        stats_map[merchant_key] = {"n": n, "mean": mean, "stddev": stddev}
+
+    if not stats_map:
+        return []
+
+    # --- Fetch transactions to evaluate (search range + optional filters) ---
+    extra_clauses = ""
+    params: list = [start_date, end_date]
+    if card_no:
+        extra_clauses += " AND card_no = ?"
+        params.append(card_no)
+    if category:
+        extra_clauses += " AND category = ?"
+        params.append(category)
+    if description_search:
+        extra_clauses += " AND UPPER(description) LIKE UPPER(?)"
+        params.append(f"%{description_search}%")
+
+    txn_df: pd.DataFrame = conn.execute(f"""
+        SELECT *
+        FROM transactions
+        WHERE transaction_date BETWEEN ? AND ?
+          AND debit IS NOT NULL AND debit > 0
+          {extra_clauses}
+        ORDER BY transaction_date DESC
+    """, params).df()
+
+    # --- Score each transaction and flag anomalies ---
+    results = []
+    for row in txn_df.itertuples(index=False):
+        merchant_key = _canonical(row.description)
+        stats = stats_map.get(merchant_key)
+        if stats is None:
+            continue
+        delta = float(row.debit) - stats["mean"]
+        if delta < min_delta:
+            continue
+        # z-score: swap this block to use a different anomaly method
+        z_score = delta / stats["stddev"]
+        if z_score < z_threshold:
+            continue
+        results.append({
+            "alert_type": "unusual_amount",
+            "normalized_merchant": merchant_key,
+            "z_score": round(z_score, 2),
+            "delta": round(delta, 2),
+            "merchant_stats": {
+                "n": stats["n"],
+                "mean": round(stats["mean"], 2),
+                "stddev": round(stats["stddev"], 2),
+            },
+            "transaction": {
+                "row_hash": row.row_hash,
+                "transaction_date": row.transaction_date,
+                "posted_date": row.posted_date,
+                "card_no": row.card_no,
+                "description": row.description,
+                "category": row.category,
+                "debit": float(row.debit),
+                "credit": float(row.credit) if row.credit is not None else None,
+                "source_file": row.source_file,
+                "file_row": int(row.file_row),
+            },
+        })
+
+    return results  # already ordered by transaction_date DESC from SQL

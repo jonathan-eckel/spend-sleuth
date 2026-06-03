@@ -1,11 +1,18 @@
 import json
 import os
+import re
 
 import duckdb
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from .graph import SYSTEM_PROMPT, build_graph
 from .tools import make_tools
+
+
+def _extract_json_block(text: str) -> str | None:
+    """Extract the first {...} block from a text response."""
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    return match.group(0) if match else None
 
 
 def investigate(
@@ -34,19 +41,28 @@ def investigate(
     })
 
     last_message = final_state["messages"][-1]
-    try:
-        verdict = json.loads(last_message.content)
-    except (json.JSONDecodeError, AttributeError):
+    content = getattr(last_message, "content", "") or ""
+    verdict = None
+    # Try direct parse first, then extract first {...} block from text responses
+    for candidate_text in [content, _extract_json_block(content)]:
+        if candidate_text is None:
+            continue
+        try:
+            verdict = json.loads(candidate_text)
+            break
+        except (json.JSONDecodeError, TypeError):
+            continue
+    if verdict is None:
         verdict = {
             "evidence": [],
             "verdict": "needs_review",
             "confidence": 0.0,
-            "explanation": f"Agent returned unparseable response: {getattr(last_message, 'content', str(last_message))}",
+            "explanation": f"Agent returned unparseable response: {content}",
             "recommended_action": "review",
         }
 
     return {
-        "transaction": candidate["txn_a"],
+        "transaction": candidate.get("txn_a") or candidate.get("transaction"),
         "alert_type": candidate["alert_type"],
         "investigation_trace": final_state.get("investigation_trace", []),
         **verdict,
