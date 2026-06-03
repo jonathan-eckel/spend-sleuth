@@ -121,12 +121,14 @@ def detect(db: Path | None, window: int, tolerance: float, start, end):
 @click.option("--db", type=click.Path(path_type=Path), default=None)
 @click.option("--threshold", default=0.80, show_default=True, help="Fuzzy similarity threshold (0–1).")
 @click.option("--all", "show_all", is_flag=True, default=False, help="Include clean merchants with no grouping issues.")
-def normalization_report(db: Path | None, threshold: float, show_all: bool):
+@click.option("--summary", is_flag=True, default=False, help="Print summary stats only, no hierarchy.")
+def normalization_report(db: Path | None, threshold: float, show_all: bool, summary: bool):
     """Hierarchical view of merchant clusters using fuzzy name matching.
 
     Flags normalized merchant keys that are similar but distinct — candidates
     for fixing normalize_merchant() to improve unusual-amount detection.
     Use --all to see every merchant in the hierarchy, not just issues.
+    Use --summary for a quick coverage overview without the full hierarchy.
     """
     from collections import defaultdict
 
@@ -166,7 +168,20 @@ def normalization_report(db: Path | None, threshold: float, show_all: bool):
     merged = {rep: members for rep, members in clusters.items() if len(members) > 1}
     singletons = {rep: members for rep, members in clusters.items() if len(members) == 1}
 
-    click.echo(f"Fuzzy similarity threshold: {threshold}\n")
+    total_txns = sum(d["count"] for d in key_data.values())
+    normalized_txns = sum(d["count"] for d in key_data.values() if len(d["variants"]) > 1)
+    merged_txns = sum(cluster_count(rep) for rep in merged)
+    normalized_pct = 100 * normalized_txns / total_txns if total_txns else 0
+    merged_pct = 100 * merged_txns / total_txns if total_txns else 0
+    click.echo(f"Fuzzy similarity threshold: {threshold}")
+    click.echo(f"Grouping coverage:")
+    click.echo(f"  {normalized_txns}/{total_txns} transactions ({normalized_pct:.0f}%) are in normalized groups")
+    click.echo(f"  {merged_txns}/{total_txns} transactions ({merged_pct:.0f}%) are in merged canonical groups")
+
+    if summary:
+        return
+
+    click.echo()
 
     # --- Canonical merchant groups (merged by canonical map) ---
     if not merged:
@@ -177,13 +192,12 @@ def normalization_report(db: Path | None, threshold: float, show_all: bool):
         for rep in sorted(merged, key=cluster_count, reverse=True):
             members = merged[rep]
             total = cluster_count(rep)
-            click.echo(f"[canonical: {rep}]  ({total} txns, {len(members)} normalized variants)")
+            click.echo(f"[canonical]  {rep}  ({total} txns, {len(members)} normalized variants)")
             for key in members:
                 d = key_data[key]
-                marker = " *" if key == rep else ""
-                click.echo(f"    {key}{marker}  ({d['count']} txns)")
+                click.echo(f"  [normalized]  {key}  ({d['count']} txns)")
                 for raw, n in sorted(d["variants"], key=lambda x: x[1], reverse=True):
-                    click.echo(f"        {raw}  ({n})")
+                    click.echo(f"    [raw]  {raw}  ({n})")
             click.echo()
 
     # --- Clean merchants (shown only with --all) ---
@@ -192,9 +206,10 @@ def normalization_report(db: Path | None, threshold: float, show_all: bool):
         for rep in sorted(singletons, key=cluster_count, reverse=True):
             key = rep
             d = key_data[key]
-            click.echo(f"{key}  ({d['count']} txns)")
+            click.echo(f"[canonical]  {key}  ({d['count']} txns)")
             for raw, n in sorted(d["variants"], key=lambda x: x[1], reverse=True):
-                click.echo(f"    {raw}  ({n})")
+                click.echo(f"  [normalized]  {key}  ({n})")
+                click.echo(f"    [raw]  {raw}  ({n})")
             click.echo()
 
 
