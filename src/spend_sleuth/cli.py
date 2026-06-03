@@ -119,14 +119,17 @@ def detect(db: Path | None, window: int, tolerance: float, start, end):
 
 @cli.command(name="normalization-report")
 @click.option("--db", type=click.Path(path_type=Path), default=None)
-def normalization_report(db: Path | None):
-    """Show how normalize_merchant() groups raw description strings.
+@click.option("--threshold", default=0.80, show_default=True, help="Fuzzy similarity threshold (0–1).")
+@click.option("--all", "show_all", is_flag=True, default=False, help="Include clean merchants with no grouping issues.")
+def normalization_report(db: Path | None, threshold: float, show_all: bool):
+    """Hierarchical view of merchant clusters using fuzzy name matching.
 
-    Prints every normalized merchant key that maps to more than one distinct
-    raw description, sorted by total transaction count. Use this to spot
-    grouping mistakes before trusting unusual-amount alert results.
+    Flags normalized merchant keys that are similar but distinct — candidates
+    for fixing normalize_merchant() to improve unusual-amount detection.
+    Use --all to see every merchant in the hierarchy, not just issues.
     """
     from collections import defaultdict
+    from difflib import SequenceMatcher
 
     db_path = db or DB_PATH
     conn = get_connection(db_path, read_only=True)
@@ -141,25 +144,82 @@ def normalization_report(db: Path | None):
     finally:
         conn.close()
 
-    groups: dict[str, list[str]] = defaultdict(list)
-    counts: dict[str, int] = defaultdict(int)
+    # Build normalized_key → {count, variants: [(raw_desc, count)]}
+    key_data: dict[str, dict] = {}
     for desc, n in rows:
         key = normalize_merchant(desc)
-        groups[key].append(desc)
-        counts[key] += n
+        if key not in key_data:
+            key_data[key] = {"count": 0, "variants": []}
+        key_data[key]["count"] += n
+        key_data[key]["variants"].append((desc, n))
 
-    multi = {k: v for k, v in groups.items() if len(v) > 1}
-    if not multi:
-        click.echo("No groupings found — all merchants map to a unique normalized key.")
-        return
+    # Union-find clustering by pairwise fuzzy similarity
+    keys = list(key_data.keys())
+    parent = {k: k for k in keys}
 
-    click.echo(f"Found {len(multi)} merchant group(s) with multiple raw description variants:\n")
-    for key in sorted(multi, key=lambda k: counts[k], reverse=True):
-        variants = multi[key]
-        click.echo(f"{key}  ({counts[key]} transactions across {len(variants)} raw strings)")
-        for v in sorted(variants):
-            click.echo(f"  {v}")
-        click.echo()
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # path compression
+            x = parent[x]
+        return x
+
+    def union(x: str, y: str) -> None:
+        px, py = find(x), find(y)
+        if px != py:
+            # Higher transaction count becomes the root
+            if key_data[px]["count"] >= key_data[py]["count"]:
+                parent[py] = px
+            else:
+                parent[px] = py
+
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            if SequenceMatcher(None, keys[i], keys[j]).ratio() >= threshold:
+                union(keys[i], keys[j])
+
+    # Group by cluster root; sort members within each cluster by count desc
+    clusters: dict[str, list[str]] = defaultdict(list)
+    for k in keys:
+        clusters[find(k)].append(k)
+    for members in clusters.values():
+        members.sort(key=lambda k: key_data[k]["count"], reverse=True)
+
+    def cluster_count(rep: str) -> int:
+        return sum(key_data[k]["count"] for k in clusters[rep])
+
+    issues = {rep: members for rep, members in clusters.items() if len(members) > 1}
+    singletons = {rep: members for rep, members in clusters.items() if len(members) == 1}
+
+    click.echo(f"Fuzzy similarity threshold: {threshold}\n")
+
+    # --- Potential grouping issues ---
+    if not issues:
+        click.echo("No potential grouping issues found.")
+    else:
+        hidden_note = f"  |  {len(singletons)} clean merchant(s) not shown (use --all)" if not show_all else ""
+        click.echo(f"Found {len(issues)} potential grouping issue(s){hidden_note}\n")
+        for rep in sorted(issues, key=cluster_count, reverse=True):
+            members = issues[rep]
+            total = cluster_count(rep)
+            label = "  /  ".join(members)
+            click.echo(f"[?] {label}  ({total} txns across {len(members)} normalized keys)")
+            for key in members:
+                d = key_data[key]
+                click.echo(f"    {key}  ({d['count']} txns)")
+                for raw, n in sorted(d["variants"], key=lambda x: x[1], reverse=True):
+                    click.echo(f"        {raw}  ({n})")
+            click.echo()
+
+    # --- Clean merchants (shown only with --all) ---
+    if show_all and singletons:
+        click.echo("=== Clean merchants ===\n")
+        for rep in sorted(singletons, key=cluster_count, reverse=True):
+            key = rep
+            d = key_data[key]
+            click.echo(f"{key}  ({d['count']} txns)")
+            for raw, n in sorted(d["variants"], key=lambda x: x[1], reverse=True):
+                click.echo(f"    {raw}  ({n})")
+            click.echo()
 
 
 @cli.command()
