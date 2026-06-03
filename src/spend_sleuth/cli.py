@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .db import get_connection, init_schema, DB_PATH
 from .load import load_directory, load_csv
-from .detect import find_duplicate_candidates, find_unusual_amount_candidates, normalize_merchant
+from .detect import find_duplicate_candidates, find_unusual_amount_candidates, normalize_merchant, build_canonical_merchant_map
 
 
 @click.group()
@@ -129,7 +129,6 @@ def normalization_report(db: Path | None, threshold: float, show_all: bool):
     Use --all to see every merchant in the hierarchy, not just issues.
     """
     from collections import defaultdict
-    from difflib import SequenceMatcher
 
     db_path = db or DB_PATH
     conn = get_connection(db_path, read_only=True)
@@ -153,34 +152,11 @@ def normalization_report(db: Path | None, threshold: float, show_all: bool):
         key_data[key]["count"] += n
         key_data[key]["variants"].append((desc, n))
 
-    # Union-find clustering by pairwise fuzzy similarity
-    keys = list(key_data.keys())
-    parent = {k: k for k in keys}
-
-    def find(x: str) -> str:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]  # path compression
-            x = parent[x]
-        return x
-
-    def union(x: str, y: str) -> None:
-        px, py = find(x), find(y)
-        if px != py:
-            # Higher transaction count becomes the root
-            if key_data[px]["count"] >= key_data[py]["count"]:
-                parent[py] = px
-            else:
-                parent[px] = py
-
-    for i in range(len(keys)):
-        for j in range(i + 1, len(keys)):
-            if SequenceMatcher(None, keys[i], keys[j]).ratio() >= threshold:
-                union(keys[i], keys[j])
-
-    # Group by cluster root; sort members within each cluster by count desc
+    # Cluster using the same function detection uses — report always matches detection
+    canonical_map = build_canonical_merchant_map(conn, threshold=threshold)
     clusters: dict[str, list[str]] = defaultdict(list)
-    for k in keys:
-        clusters[find(k)].append(k)
+    for norm_key, canonical in canonical_map.items():
+        clusters[canonical].append(norm_key)
     for members in clusters.values():
         members.sort(key=lambda k: key_data[k]["count"], reverse=True)
 

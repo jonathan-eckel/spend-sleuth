@@ -64,9 +64,67 @@ def normalize_merchant(description: str) -> str:
     return s
 
 
-_MIN_UNUSUAL_DELTA: float = 10.0  # minimum absolute $ above historical mean to flag; tune after review
+_MIN_UNUSUAL_DELTA: float = 10.0   # minimum absolute $ above historical mean to flag; tune after review
+_CANONICAL_THRESHOLD: float = 0.80  # fuzzy similarity cutoff for merchant clustering
 
 _OMNY_PATTERNS = ("OMNY", "MTA*NYCT PAYGO")
+
+
+def build_canonical_merchant_map(
+    conn: duckdb.DuckDBPyConnection,
+    threshold: float = _CANONICAL_THRESHOLD,
+) -> dict[str, str]:
+    """Return {normalized_key → canonical_name} via fuzzy clustering.
+
+    Canonical name = highest-transaction-count normalized key in each cluster.
+    Merchants with no similar peers map to themselves (identity mapping).
+    """
+    from collections import defaultdict
+    from difflib import SequenceMatcher
+
+    rows = conn.execute("""
+        SELECT description, COUNT(*) AS n
+        FROM transactions
+        WHERE debit IS NOT NULL AND debit > 0
+        GROUP BY description
+    """).fetchall()
+
+    key_counts: dict[str, int] = {}
+    for desc, n in rows:
+        key = normalize_merchant(desc)
+        key_counts[key] = key_counts.get(key, 0) + n
+
+    keys = list(key_counts.keys())
+    parent = {k: k for k in keys}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: str, y: str) -> None:
+        px, py = find(x), find(y)
+        if px != py:
+            parent[py] = px  # root is arbitrary; canonical chosen after clustering
+
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            if SequenceMatcher(None, keys[i], keys[j]).ratio() >= threshold:
+                union(keys[i], keys[j])
+
+    # Group by cluster root, then pick the highest-count key as canonical
+    clusters: dict[str, list[str]] = defaultdict(list)
+    for k in keys:
+        clusters[find(k)].append(k)
+
+    canonical_map: dict[str, str] = {}
+    for members in clusters.values():
+        canonical = max(members, key=lambda k: key_counts[k])
+        for k in members:
+            canonical_map[k] = canonical
+
+    return canonical_map
 
 
 def _is_omny(description: str) -> bool:
@@ -110,11 +168,16 @@ def find_duplicate_candidates(
                                   f"WHERE transaction_date BETWEEN ? AND ?{extra_clauses}")
 
     df: pd.DataFrame = conn.execute(sql, params).df()
+    canonical_map = build_canonical_merchant_map(conn)
+
+    def _canonical(desc: str) -> str:
+        key = normalize_merchant(desc)
+        return canonical_map.get(key, key)
 
     candidates = []
     for row in df.itertuples(index=False):
-        norm_a = normalize_merchant(row.a_description)
-        norm_b = normalize_merchant(row.b_description)
+        norm_a = _canonical(row.a_description)
+        norm_b = _canonical(row.b_description)
         if norm_a != norm_b:
             continue
 
@@ -178,6 +241,11 @@ def find_unusual_amount_candidates(
         end_date = conn.execute("SELECT MAX(transaction_date) FROM transactions").fetchone()[0]
 
     lookback_start = end_date - timedelta(days=lookback_days)
+    canonical_map = build_canonical_merchant_map(conn)
+
+    def _canonical(desc: str) -> str:
+        key = normalize_merchant(desc)
+        return canonical_map.get(key, key)
 
     # --- Build merchant stats from the full lookback window (no card/category filters) ---
     history_df: pd.DataFrame = conn.execute("""
@@ -189,7 +257,7 @@ def find_unusual_amount_candidates(
 
     stats_map: dict[str, dict] = {}
     for merchant_key, group in history_df.assign(
-        merchant_key=history_df["description"].map(normalize_merchant)
+        merchant_key=history_df["description"].map(_canonical)
     ).groupby("merchant_key")["debit"]:
         n = len(group)
         if n < min_history:
@@ -228,7 +296,7 @@ def find_unusual_amount_candidates(
     # --- Score each transaction and flag anomalies ---
     results = []
     for row in txn_df.itertuples(index=False):
-        merchant_key = normalize_merchant(row.description)
+        merchant_key = _canonical(row.description)
         stats = stats_map.get(merchant_key)
         if stats is None:
             continue

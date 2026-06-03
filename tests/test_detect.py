@@ -1,6 +1,6 @@
 import pytest
 from datetime import date
-from spend_sleuth.detect import normalize_merchant, find_duplicate_candidates, find_unusual_amount_candidates
+from spend_sleuth.detect import normalize_merchant, find_duplicate_candidates, find_unusual_amount_candidates, build_canonical_merchant_map
 from tests.conftest import insert_transaction
 
 
@@ -207,3 +207,53 @@ def test_unusual_amount_high_side_only(conn):
 
     results = find_unusual_amount_candidates(conn)
     assert len(results) == 0
+
+
+# --- build_canonical_merchant_map ---
+
+def test_canonical_map_clusters_similar_merchants(conn):
+    # "ACME STORE" and "ACME STORES" are very similar (ratio ≈ 0.95)
+    # Higher-count merchant should become canonical
+    for i in range(10):  # 10 transactions for ACME STORE
+        insert_transaction(conn, description="ACME STORE", debit=20.00, file_row=i)
+    for i in range(3):   # 3 for ACME STORES → should map to ACME STORE
+        insert_transaction(conn, description="ACME STORES", debit=20.00, file_row=100 + i)
+
+    cmap = build_canonical_merchant_map(conn)
+    assert cmap["ACME STORE"] == "ACME STORE"
+    assert cmap["ACME STORES"] == "ACME STORE"
+
+
+def test_canonical_map_leaves_dissimilar_merchants_alone(conn):
+    insert_transaction(conn, description="AMAZON", debit=50.00, file_row=0)
+    insert_transaction(conn, description="WALMART", debit=50.00, file_row=1)
+
+    cmap = build_canonical_merchant_map(conn)
+    assert cmap["AMAZON"] == "AMAZON"
+    assert cmap["WALMART"] == "WALMART"
+
+
+def test_canonical_map_transitivity(conn):
+    # Three merchants that all pair-wise score ≥ 0.80 (each pair ≈ 0.95).
+    # Union-find should merge all three into one cluster; canonical = highest count.
+    # "ACME STORE" / "ACME STORES" / "ACME STORED" — each pair differs by 1 char.
+    for i in range(10):
+        insert_transaction(conn, description="ACME STORE", debit=10.00, file_row=i)
+    for i in range(5):
+        insert_transaction(conn, description="ACME STORES", debit=10.00, file_row=100 + i)
+    for i in range(2):
+        insert_transaction(conn, description="ACME STORED", debit=10.00, file_row=200 + i)
+
+    cmap = build_canonical_merchant_map(conn)
+    # All three should share the same canonical name (ACME STORE has highest count)
+    assert cmap["ACME STORE"] == cmap["ACME STORES"] == cmap["ACME STORED"] == "ACME STORE"
+
+
+def test_canonical_map_threshold_one_no_clustering(conn):
+    # At threshold=1.0 only identical strings cluster — each maps to itself
+    insert_transaction(conn, description="ACME STORE", debit=20.00, file_row=0)
+    insert_transaction(conn, description="ACME STORES", debit=20.00, file_row=1)
+
+    cmap = build_canonical_merchant_map(conn, threshold=1.0)
+    assert cmap["ACME STORE"] == "ACME STORE"
+    assert cmap["ACME STORES"] == "ACME STORES"
