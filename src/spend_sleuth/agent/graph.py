@@ -18,8 +18,10 @@ Use the available tools to gather evidence before reaching a conclusion. Think s
 2. Check for recurring patterns if relevant.
 3. Use get_user_context() to understand typical spending behavior.
 
-After gathering evidence, respond with ONLY a JSON object (no markdown, no extra text) matching
-this exact schema:
+After gathering evidence, your final message MUST be a raw JSON object and nothing else.
+No preamble, no explanation, no markdown fences — just the JSON object starting with { and ending with }.
+
+Required schema:
 {
   "evidence": ["<finding 1>", "<finding 2>", ...],
   "verdict": "benign" | "suspicious" | "needs_review",

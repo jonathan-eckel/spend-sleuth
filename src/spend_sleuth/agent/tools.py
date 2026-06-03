@@ -44,7 +44,7 @@ def make_tools(conn: duckdb.DuckDBPyConnection) -> list:
         """
         rows = conn.execute(sql, params).fetchall()
         return json.dumps([
-            {"description": r[0], "transaction_date": r[1], "debit": float(r[2]) if r[2] else None}
+            {"description": r[0], "transaction_date": r[1], "debit": float(r[2]) if r[2] is not None else None}
             for r in rows
         ])
 
