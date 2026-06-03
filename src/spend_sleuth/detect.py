@@ -1,5 +1,5 @@
 import re
-from datetime import date
+from datetime import date, timedelta
 import duckdb
 import pandas as pd
 
@@ -63,6 +63,8 @@ def normalize_merchant(description: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+
+_MIN_UNUSUAL_DELTA: float = 10.0  # minimum absolute $ above historical mean to flag; tune after review
 
 _OMNY_PATTERNS = ("OMNY", "MTA*NYCT PAYGO")
 
@@ -149,3 +151,116 @@ def find_duplicate_candidates(
         })
 
     return sorted(candidates, key=lambda c: c["txn_a"]["transaction_date"], reverse=True)
+
+
+def find_unusual_amount_candidates(
+    conn: duckdb.DuckDBPyConnection,
+    z_threshold: float = 2.0,
+    min_history: int = 5,
+    min_delta: float = _MIN_UNUSUAL_DELTA,
+    lookback_days: int = 365,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    card_no: str | None = None,
+    category: str | None = None,
+    description_search: str | None = None,
+) -> list[dict]:
+    """Find transactions where the amount is unusually high for a known merchant.
+
+    A merchant is "known" if it has at least `min_history` transactions in the
+    lookback window. Anomaly scoring uses z-score (high-side only); swap this
+    step to use IQR or MAD by replacing the z_score computation and threshold
+    comparison below.
+    """
+    if start_date is None:
+        start_date = conn.execute("SELECT MIN(transaction_date) FROM transactions").fetchone()[0]
+    if end_date is None:
+        end_date = conn.execute("SELECT MAX(transaction_date) FROM transactions").fetchone()[0]
+
+    lookback_start = end_date - timedelta(days=lookback_days)
+
+    # --- Build merchant stats from the full lookback window (no card/category filters) ---
+    history_df: pd.DataFrame = conn.execute("""
+        SELECT description, CAST(debit AS DOUBLE) AS debit
+        FROM transactions
+        WHERE transaction_date BETWEEN ? AND ?
+          AND debit IS NOT NULL AND debit > 0
+    """, [lookback_start, end_date]).df()
+
+    stats_map: dict[str, dict] = {}
+    for merchant_key, group in history_df.assign(
+        merchant_key=history_df["description"].map(normalize_merchant)
+    ).groupby("merchant_key")["debit"]:
+        n = len(group)
+        if n < min_history:
+            continue
+        mean = float(group.mean())
+        stddev = float(group.std(ddof=0))
+        if stddev <= 0:
+            continue
+        stats_map[merchant_key] = {"n": n, "mean": mean, "stddev": stddev}
+
+    if not stats_map:
+        return []
+
+    # --- Fetch transactions to evaluate (search range + optional filters) ---
+    extra_clauses = ""
+    params: list = [start_date, end_date]
+    if card_no:
+        extra_clauses += " AND card_no = ?"
+        params.append(card_no)
+    if category:
+        extra_clauses += " AND category = ?"
+        params.append(category)
+    if description_search:
+        extra_clauses += " AND UPPER(description) LIKE UPPER(?)"
+        params.append(f"%{description_search}%")
+
+    txn_df: pd.DataFrame = conn.execute(f"""
+        SELECT *
+        FROM transactions
+        WHERE transaction_date BETWEEN ? AND ?
+          AND debit IS NOT NULL AND debit > 0
+          {extra_clauses}
+        ORDER BY transaction_date DESC
+    """, params).df()
+
+    # --- Score each transaction and flag anomalies ---
+    results = []
+    for row in txn_df.itertuples(index=False):
+        merchant_key = normalize_merchant(row.description)
+        stats = stats_map.get(merchant_key)
+        if stats is None:
+            continue
+        delta = float(row.debit) - stats["mean"]
+        if delta < min_delta:
+            continue
+        # z-score: swap this block to use a different anomaly method
+        z_score = delta / stats["stddev"]
+        if z_score < z_threshold:
+            continue
+        results.append({
+            "alert_type": "unusual_amount",
+            "normalized_merchant": merchant_key,
+            "z_score": round(z_score, 2),
+            "delta": round(delta, 2),
+            "merchant_stats": {
+                "n": stats["n"],
+                "mean": round(stats["mean"], 2),
+                "stddev": round(stats["stddev"], 2),
+            },
+            "transaction": {
+                "row_hash": row.row_hash,
+                "transaction_date": row.transaction_date,
+                "posted_date": row.posted_date,
+                "card_no": row.card_no,
+                "description": row.description,
+                "category": row.category,
+                "debit": float(row.debit),
+                "credit": float(row.credit) if row.credit is not None else None,
+                "source_file": row.source_file,
+                "file_row": int(row.file_row),
+            },
+        })
+
+    return results  # already ordered by transaction_date DESC from SQL

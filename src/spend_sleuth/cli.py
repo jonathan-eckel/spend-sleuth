@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .db import get_connection, init_schema, DB_PATH
 from .load import load_directory, load_csv
-from .detect import find_duplicate_candidates
+from .detect import find_duplicate_candidates, find_unusual_amount_candidates, normalize_merchant
 
 
 @click.group()
@@ -66,36 +66,100 @@ def stats(db: Path | None):
 @click.option("--start", type=click.DateTime(formats=["%Y-%m-%d"]), default=None, help="Start date (YYYY-MM-DD).")
 @click.option("--end", type=click.DateTime(formats=["%Y-%m-%d"]), default=None, help="End date (YYYY-MM-DD).")
 def detect(db: Path | None, window: int, tolerance: float, start, end):
-    """Find candidate duplicate charges."""
+    """Find candidate duplicate charges and unusual amounts."""
     db_path = db or DB_PATH
     conn = get_connection(db_path, read_only=True)
     start_date = start.date() if start else None
     end_date = end.date() if end else None
     try:
-        candidates = find_duplicate_candidates(
+        dup_candidates = find_duplicate_candidates(
             conn, window_days=window, amount_tolerance=tolerance,
             start_date=start_date, end_date=end_date,
+        )
+        unusual_candidates = find_unusual_amount_candidates(
+            conn, start_date=start_date, end_date=end_date,
         )
     finally:
         conn.close()
 
-    if not candidates:
+    # --- Duplicate charges ---
+    click.echo("=== Duplicate Charge Candidates ===")
+    if not dup_candidates:
         click.echo("No duplicate candidates found.")
+    else:
+        non_omny = [c for c in dup_candidates if not c["is_omny"]]
+        omny = [c for c in dup_candidates if c["is_omny"]]
+        click.echo(f"Found {len(non_omny)} flagged pair(s), {len(omny)} OMNY pair(s).\n")
+        for i, c in enumerate(dup_candidates, 1):
+            omny_tag = "  [OMNY - expected]" if c["is_omny"] else ""
+            a, b = c["txn_a"], c["txn_b"]
+            click.echo(
+                f"  {i}. {c['normalized_merchant']}{omny_tag}\n"
+                f"     A: {a['transaction_date']}  ${a['debit']:.2f}  {a['description']}\n"
+                f"     B: {b['transaction_date']}  ${b['debit']:.2f}  {b['description']}\n"
+                f"     Days apart: {c['days_apart']}  |  Amount diff: ${c['amount_diff']:.2f}\n"
+            )
+
+    # --- Unusual amounts ---
+    click.echo("\n=== Unusual Amount Candidates ===")
+    if not unusual_candidates:
+        click.echo("No unusual amount candidates found.")
+    else:
+        click.echo(f"Found {len(unusual_candidates)} candidate(s).\n")
+        for i, c in enumerate(unusual_candidates, 1):
+            t = c["transaction"]
+            s = c["merchant_stats"]
+            click.echo(
+                f"  {i}. {c['normalized_merchant']}\n"
+                f"     {t['transaction_date']}  ${t['debit']:.2f}  {t['description']}\n"
+                f"     Typical: ${s['mean']:.2f} ± ${s['stddev']:.2f} (n={s['n']})  "
+                f"|  Delta: +${c['delta']:.2f}  |  z={c['z_score']:.2f}\n"
+            )
+
+
+@cli.command(name="normalization-report")
+@click.option("--db", type=click.Path(path_type=Path), default=None)
+def normalization_report(db: Path | None):
+    """Show how normalize_merchant() groups raw description strings.
+
+    Prints every normalized merchant key that maps to more than one distinct
+    raw description, sorted by total transaction count. Use this to spot
+    grouping mistakes before trusting unusual-amount alert results.
+    """
+    from collections import defaultdict
+
+    db_path = db or DB_PATH
+    conn = get_connection(db_path, read_only=True)
+    try:
+        rows = conn.execute("""
+            SELECT description, COUNT(*) AS n
+            FROM transactions
+            WHERE debit IS NOT NULL AND debit > 0
+            GROUP BY description
+            ORDER BY description
+        """).fetchall()
+    finally:
+        conn.close()
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    counts: dict[str, int] = defaultdict(int)
+    for desc, n in rows:
+        key = normalize_merchant(desc)
+        groups[key].append(desc)
+        counts[key] += n
+
+    multi = {k: v for k, v in groups.items() if len(v) > 1}
+    if not multi:
+        click.echo("No groupings found — all merchants map to a unique normalized key.")
         return
 
-    non_omny = [c for c in candidates if not c["is_omny"]]
-    omny = [c for c in candidates if c["is_omny"]]
-    click.echo(f"Found {len(non_omny)} flagged pair(s), {len(omny)} OMNY pair(s).\n")
-
-    for i, c in enumerate(candidates, 1):
-        omny_tag = "  [OMNY - expected]" if c["is_omny"] else ""
-        a, b = c["txn_a"], c["txn_b"]
-        click.echo(
-            f"  {i}. {c['normalized_merchant']}{omny_tag}\n"
-            f"     A: {a['transaction_date']}  ${a['debit']:.2f}  {a['description']}\n"
-            f"     B: {b['transaction_date']}  ${b['debit']:.2f}  {b['description']}\n"
-            f"     Days apart: {c['days_apart']}  |  Amount diff: ${c['amount_diff']:.2f}\n"
-        )
+    click.echo(f"Found {len(multi)} merchant group(s) with multiple raw description variants:\n")
+    for key in sorted(multi, key=lambda k: counts[k], reverse=True):
+        variants = multi[key]
+        click.echo(f"{key}  ({counts[key]} transactions across {len(variants)} raw strings)")
+        for v in sorted(variants):
+            click.echo(f"  {v}")
+        click.echo()
 
 
 @cli.command()

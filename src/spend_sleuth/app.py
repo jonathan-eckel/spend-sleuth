@@ -7,7 +7,7 @@ import pandas as pd
 import altair as alt
 
 from spend_sleuth.db import get_connection, DB_PATH
-from spend_sleuth.detect import find_duplicate_candidates
+from spend_sleuth.detect import find_duplicate_candidates, find_unusual_amount_candidates
 from spend_sleuth.agent.run import investigate
 
 _CACHE_PATH = DB_PATH.parent / "investigation_cache.json"
@@ -29,6 +29,18 @@ def _save_cache(cache: dict) -> None:
 @st.cache_resource
 def get_conn():
     return get_connection(DB_PATH, read_only=True)
+
+
+@st.cache_data
+def load_unusual_amount_candidates(start_date, end_date, card_no, category, description_search) -> list[dict]:
+    return find_unusual_amount_candidates(
+        get_conn(),
+        start_date=start_date,
+        end_date=end_date,
+        card_no=card_no or None,
+        category=category or None,
+        description_search=description_search or None,
+    )
 
 
 @st.cache_data
@@ -321,3 +333,62 @@ else:
                 with col_b:
                     st.write(b)
                 st.divider()
+
+st.divider()
+
+# --- Unusual amount candidates ---
+st.subheader("Unusual Amount Candidates")
+
+unusual_candidates = load_unusual_amount_candidates(
+    date_range[0] if len(date_range) == 2 else date_min,
+    date_range[1] if len(date_range) == 2 else date_max,
+    selected_card if selected_card != "All" else "",
+    selected_category if selected_category != "All" else "",
+    search,
+)
+
+if not unusual_candidates:
+    st.info("No unusual amount candidates detected.")
+else:
+    st.caption(f"{len(unusual_candidates)} candidate(s)")
+
+    def _render_unusual_candidate(c: dict) -> None:
+        t = c["transaction"]
+        s = c["merchant_stats"]
+        key = t["row_hash"]
+        label = (
+            f"{c['normalized_merchant']}  —  "
+            f"${t['debit']:.2f} vs. typical ${s['mean']:.2f}  |  "
+            f"z={c['z_score']:.2f}  |  {t['transaction_date']}"
+        )
+        with st.expander(label, expanded=True):
+            col_amt, col_stats = st.columns(2)
+            with col_amt:
+                st.markdown("**Flagged Transaction**")
+                st.write(t)
+            with col_stats:
+                st.markdown("**Merchant History**")
+                st.metric("Typical amount", f"${s['mean']:.2f}", delta=f"+${c['delta']:.2f} this charge")
+                st.metric("Std dev", f"${s['stddev']:.2f}")
+                st.metric("Z-score", f"{c['z_score']:.2f}")
+                st.metric("History (n)", s["n"])
+            st.divider()
+            cached = st.session_state.investigations.get(key)
+            if cached:
+                if st.button("Re-investigate", key=f"btn_{key}"):
+                    with st.spinner("Running agent investigation…"):
+                        result = investigate(c, get_conn(), use_stub=use_stub)
+                    st.session_state.investigations[key] = result
+                    _save_cache(st.session_state.investigations)
+                    st.rerun()
+                _render_investigation(cached)
+            else:
+                if st.button("Investigate", key=f"btn_{key}"):
+                    with st.spinner("Running agent investigation…"):
+                        result = investigate(c, get_conn(), use_stub=use_stub)
+                    st.session_state.investigations[key] = result
+                    _save_cache(st.session_state.investigations)
+                    st.rerun()
+
+    for c in unusual_candidates:
+        _render_unusual_candidate(c)
