@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .db import get_connection, init_schema, DB_PATH
 from .load import load_directory, load_csv
-from .detect import find_duplicate_candidates, find_unusual_amount_candidates, normalize_merchant, build_canonical_merchant_map
+from .detect import find_duplicate_candidates, find_unusual_amount_candidates, find_subscription_candidates, normalize_merchant, build_canonical_merchant_map
 
 
 @click.group()
@@ -79,6 +79,7 @@ def detect(db: Path | None, window: int, tolerance: float, start, end):
         unusual_candidates = find_unusual_amount_candidates(
             conn, start_date=start_date, end_date=end_date,
         )
+        subscription_candidates = find_subscription_candidates(conn)
     finally:
         conn.close()
 
@@ -114,6 +115,22 @@ def detect(db: Path | None, window: int, tolerance: float, start, end):
                 f"     {t['transaction_date']}  ${t['debit']:.2f}  {t['description']}\n"
                 f"     Typical: ${s['mean']:.2f} ± ${s['stddev']:.2f} (n={s['n']})  "
                 f"|  Delta: +${c['delta']:.2f}  |  z={c['z_score']:.2f}\n"
+            )
+
+    # --- Forgotten subscriptions ---
+    click.echo("\n=== Forgotten Subscription Candidates ===")
+    if not subscription_candidates:
+        click.echo("No subscription candidates found.")
+    else:
+        click.echo(f"Found {len(subscription_candidates)} candidate(s).\n")
+        for i, c in enumerate(subscription_candidates, 1):
+            t = c["transaction"]
+            click.echo(
+                f"  {i}. {c['normalized_merchant']}  ({c['pattern']})\n"
+                f"     Last: {t['transaction_date']}  ${t['debit']:.2f}  {t['description']}\n"
+                f"     {c['charge_count']} charges  |  avg ${c['typical_amount']:.2f}  |  "
+                f"every {c['mean_interval_days']:.0f} days  |  total ${c['total_spent']:.2f}\n"
+                f"     Active since {c['first_charge']}\n"
             )
 
 
