@@ -1,6 +1,6 @@
 import pytest
 from datetime import date
-from spend_sleuth.detect import normalize_merchant, find_duplicate_candidates, find_unusual_amount_candidates, build_canonical_merchant_map
+from spend_sleuth.detect import normalize_merchant, find_duplicate_candidates, find_unusual_amount_candidates, find_subscription_candidates, build_canonical_merchant_map
 from tests.conftest import insert_transaction
 
 
@@ -247,6 +247,100 @@ def test_canonical_map_transitivity(conn):
     cmap = build_canonical_merchant_map(conn)
     # All three should share the same canonical name (ACME STORE has highest count)
     assert cmap["ACME STORE"] == cmap["ACME STORES"] == cmap["ACME STORED"] == "ACME STORE"
+
+
+# --- find_subscription_candidates ---
+
+def _insert_recurring(conn, description, amount, interval_days, count, start_date="2025-01-01", file_row_offset=0):
+    """Insert `count` charges spaced `interval_days` apart."""
+    from datetime import date, timedelta
+    base = date.fromisoformat(start_date)
+    for i in range(count):
+        insert_transaction(
+            conn,
+            description=description,
+            debit=amount,
+            transaction_date=str(base + timedelta(days=i * interval_days)),
+            file_row=file_row_offset + i,
+        )
+
+
+def test_subscription_finds_monthly_recurring(conn):
+    _insert_recurring(conn, "NETFLIX", 15.99, interval_days=30, count=6)
+
+    results = find_subscription_candidates(conn)
+    assert len(results) == 1
+    r = results[0]
+    assert r["alert_type"] == "subscription"
+    assert r["normalized_merchant"] == "NETFLIX"
+    assert r["pattern"] == "monthly"
+    assert r["charge_count"] == 6
+    assert r["typical_amount"] == pytest.approx(15.99)
+    assert r["total_spent"] == pytest.approx(15.99 * 6)
+
+
+def test_subscription_most_recent_charge_as_transaction(conn):
+    _insert_recurring(conn, "SPOTIFY", 9.99, interval_days=30, count=4)
+
+    results = find_subscription_candidates(conn)
+    assert len(results) == 1
+    # Most recent charge is the last inserted (index 3 → 90 days after start)
+    from datetime import date, timedelta
+    expected_date = str(date.fromisoformat("2025-01-01") + timedelta(days=3 * 30))
+    assert results[0]["transaction"]["transaction_date"] == expected_date
+
+
+def test_subscription_ignores_irregular_charges(conn):
+    # Intervals: 5, 30, 60, 90, 10 days — high variance, cv >> 0.3
+    from datetime import date
+    dates = ["2025-01-01", "2025-01-06", "2025-02-05", "2025-04-06", "2025-07-04", "2025-07-14"]
+    for i, d in enumerate(dates):
+        insert_transaction(conn, description="IRREGULAR CO", debit=20.00,
+                           transaction_date=d, file_row=i)
+
+    results = find_subscription_candidates(conn)
+    assert len(results) == 0
+
+
+def test_subscription_requires_min_charges(conn):
+    _insert_recurring(conn, "NEW SUB", 12.00, interval_days=30, count=2)
+
+    results = find_subscription_candidates(conn, min_charges=3)
+    assert len(results) == 0
+
+
+def test_subscription_requires_min_span(conn):
+    # 4 charges at 7-day intervals = 21-day span, below default min_span_days=60
+    _insert_recurring(conn, "WEEKLY APP", 5.00, interval_days=7, count=4)
+
+    results = find_subscription_candidates(conn, min_span_days=60)
+    assert len(results) == 0
+
+
+def test_subscription_detects_weekly_pattern(conn):
+    _insert_recurring(conn, "WEEKLY APP", 5.00, interval_days=7, count=10)
+
+    results = find_subscription_candidates(conn, min_span_days=60)
+    assert len(results) == 1
+    assert results[0]["pattern"] == "weekly"
+
+
+def test_subscription_detects_quarterly_pattern(conn):
+    _insert_recurring(conn, "QUARTERLY SVC", 50.00, interval_days=90, count=5)
+
+    results = find_subscription_candidates(conn)
+    assert len(results) == 1
+    assert results[0]["pattern"] == "quarterly"
+
+
+def test_subscription_sorted_by_total_spent(conn):
+    _insert_recurring(conn, "CHEAP SUB", 5.00, interval_days=30, count=6, file_row_offset=0)
+    _insert_recurring(conn, "EXPENSIVE SUB", 50.00, interval_days=30, count=6, file_row_offset=10)
+
+    results = find_subscription_candidates(conn)
+    assert len(results) == 2
+    assert results[0]["normalized_merchant"] == "EXPENSIVE SUB"
+    assert results[1]["normalized_merchant"] == "CHEAP SUB"
 
 
 def test_canonical_map_threshold_one_no_clustering(conn):
