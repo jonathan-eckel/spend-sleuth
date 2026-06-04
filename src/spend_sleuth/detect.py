@@ -332,3 +332,110 @@ def find_unusual_amount_candidates(
         })
 
     return results  # already ordered by transaction_date DESC from SQL
+
+
+def find_subscription_candidates(
+    conn: duckdb.DuckDBPyConnection,
+    lookback_days: int = 400,
+    min_charges: int = 3,
+    cv_threshold: float = 0.3,
+    min_span_days: int = 60,
+    card_no: str | None = None,
+    category: str | None = None,
+    description_search: str | None = None,
+) -> list[dict]:
+    """Find merchants with a regular recurring charge pattern (possible forgotten subscriptions).
+
+    A merchant qualifies if it has at least `min_charges` debits in the lookback window,
+    the interval between charges has a coefficient of variation below `cv_threshold`, and
+    the charges span at least `min_span_days`.
+    """
+    from collections import defaultdict
+    from datetime import date as date_type
+
+    end_date = conn.execute("SELECT MAX(transaction_date) FROM transactions").fetchone()[0]
+    lookback_start = end_date - timedelta(days=lookback_days)
+    canonical_map = build_canonical_merchant_map(conn)
+
+    def _canonical(desc: str) -> str:
+        key = normalize_merchant(desc)
+        return canonical_map.get(key, key)
+
+    extra_clauses = ""
+    params: list = [lookback_start, end_date]
+    if card_no:
+        extra_clauses += " AND card_no = ?"
+        params.append(card_no)
+    if category:
+        extra_clauses += " AND category = ?"
+        params.append(category)
+    if description_search:
+        extra_clauses += " AND UPPER(description) LIKE UPPER(?)"
+        params.append(f"%{description_search}%")
+
+    rows = conn.execute(f"""
+        SELECT row_hash, description, transaction_date::VARCHAR, posted_date::VARCHAR,
+               card_no, category, CAST(debit AS DOUBLE) AS debit,
+               credit, source_file, file_row
+        FROM transactions
+        WHERE transaction_date BETWEEN ? AND ?
+          AND debit IS NOT NULL AND debit > 0
+          {extra_clauses}
+        ORDER BY description, transaction_date
+    """, params).fetchall()
+
+    merchant_charges: dict[str, list] = defaultdict(list)
+    for row in rows:
+        row_hash, desc, txn_date, posted_date, card, cat, debit, credit, source, file_row = row
+        key = _canonical(desc)
+        merchant_charges[key].append({
+            "row_hash": row_hash,
+            "description": desc,
+            "transaction_date": txn_date,
+            "posted_date": posted_date,
+            "card_no": card,
+            "category": cat,
+            "debit": debit,
+            "credit": float(credit) if credit is not None else None,
+            "source_file": source,
+            "file_row": int(file_row),
+        })
+
+    results = []
+    for merchant_key, charges in merchant_charges.items():
+        if len(charges) < min_charges:
+            continue
+
+        charges.sort(key=lambda c: c["transaction_date"])
+        dates = [date_type.fromisoformat(c["transaction_date"]) for c in charges]
+        amounts = [c["debit"] for c in charges]
+        intervals = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
+
+        if (dates[-1] - dates[0]).days < min_span_days:
+            continue
+
+        mean_interval = sum(intervals) / len(intervals)
+        variance = sum((x - mean_interval) ** 2 for x in intervals) / len(intervals)
+        stddev = variance ** 0.5
+        cv = stddev / mean_interval if mean_interval > 0 else 1.0
+
+        if cv >= cv_threshold:
+            continue
+
+        pattern = "weekly" if mean_interval < 10 else "monthly" if mean_interval < 45 else "quarterly"
+
+        results.append({
+            "alert_type": "subscription",
+            "normalized_merchant": merchant_key,
+            "pattern": pattern,
+            "mean_interval_days": round(mean_interval, 1),
+            "cv": round(cv, 3),
+            "charge_count": len(charges),
+            "typical_amount": round(sum(amounts) / len(amounts), 2),
+            "total_spent": round(sum(amounts), 2),
+            "first_charge": charges[0]["transaction_date"],
+            "last_charge": charges[-1]["transaction_date"],
+            "transaction": charges[-1],
+        })
+
+    return sorted(results, key=lambda r: r["total_spent"], reverse=True)
