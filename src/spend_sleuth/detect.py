@@ -338,7 +338,7 @@ def find_subscription_candidates(
     conn: duckdb.DuckDBPyConnection,
     lookback_days: int = 400,   # 400d: enough to catch quarterly (3×90d=270d) with buffer for annual
     min_charges: int = 3,
-    cv_threshold: float = 0.3,  # coefficient of variation: stddev/mean of intervals; < 0.3 = "clock-like"
+    cv_threshold: float = 0.3,  # coefficient of variation (stddev/mean) of intervals; < 0.3 = "clock-like"
     min_span_days: int = 60,    # coupled to min_charges: 3 monthly charges span exactly 60d (2 intervals)
     card_no: str | None = None,
     category: str | None = None,
@@ -347,7 +347,7 @@ def find_subscription_candidates(
     """Find merchants with a regular recurring charge pattern (possible forgotten subscriptions).
 
     A merchant qualifies if it has at least `min_charges` debits in the lookback window,
-    the interval between charges has a coefficient of variation (stddev/mean) below
+    the coefficient of variation (CV = stddev/mean) of inter-charge intervals is below
     `cv_threshold`, and the charges span at least `min_span_days`.
 
     CV measures how clock-like a pattern is relative to its own cadence: a monthly
