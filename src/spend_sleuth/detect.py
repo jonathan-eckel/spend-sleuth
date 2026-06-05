@@ -336,10 +336,10 @@ def find_unusual_amount_candidates(
 
 def find_subscription_candidates(
     conn: duckdb.DuckDBPyConnection,
-    lookback_days: int = 400,
+    lookback_days: int = 400,   # 400d: enough to catch quarterly (3×90d=270d) with buffer for annual
     min_charges: int = 3,
-    cv_threshold: float = 0.3,
-    min_span_days: int = 60,
+    cv_threshold: float = 0.3,  # coefficient of variation: stddev/mean of intervals; < 0.3 = "clock-like"
+    min_span_days: int = 60,    # coupled to min_charges: 3 monthly charges span exactly 60d (2 intervals)
     card_no: str | None = None,
     category: str | None = None,
     description_search: str | None = None,
@@ -347,8 +347,12 @@ def find_subscription_candidates(
     """Find merchants with a regular recurring charge pattern (possible forgotten subscriptions).
 
     A merchant qualifies if it has at least `min_charges` debits in the lookback window,
-    the interval between charges has a coefficient of variation below `cv_threshold`, and
-    the charges span at least `min_span_days`.
+    the interval between charges has a coefficient of variation (stddev/mean) below
+    `cv_threshold`, and the charges span at least `min_span_days`.
+
+    CV measures how clock-like a pattern is relative to its own cadence: a monthly
+    subscription charging ±2 days has CV ≈ 0.07; an irregular vendor charging every
+    2–8 weeks has CV ≈ 0.5+.
     """
     from collections import defaultdict
     from datetime import date as date_type
@@ -422,7 +426,20 @@ def find_subscription_candidates(
         if cv >= cv_threshold:
             continue
 
-        pattern = "weekly" if mean_interval < 10 else "monthly" if mean_interval < 45 else "quarterly"
+        # Bucket by mean interval; thresholds are midpoints between canonical cadences
+        # (weekly≈7, biweekly≈14, monthly≈30, quarterly≈90, semi-annual≈180, annual≈365)
+        if mean_interval < 10:
+            pattern = "weekly"
+        elif mean_interval < 22:
+            pattern = "biweekly"
+        elif mean_interval < 60:
+            pattern = "monthly"
+        elif mean_interval < 135:
+            pattern = "quarterly"
+        elif mean_interval < 270:
+            pattern = "semi-annual"
+        else:
+            pattern = "annual"
 
         results.append({
             "alert_type": "subscription",
