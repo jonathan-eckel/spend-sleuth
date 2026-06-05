@@ -20,6 +20,8 @@ def make_tools(conn: duckdb.DuckDBPyConnection) -> list:
         Args:
             merchant: Merchant name or substring to search for.
             days_back: How many days of history to look at (default 90).
+                For subscription alerts use mean_interval_days × 4 to cover
+                multiple full billing cycles (e.g. 360 for quarterly).
             min_amount: Optional minimum debit amount filter.
             max_amount: Optional maximum debit amount filter.
         """
