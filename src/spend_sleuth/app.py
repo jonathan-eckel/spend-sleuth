@@ -7,7 +7,7 @@ import pandas as pd
 import altair as alt
 
 from spend_sleuth.db import get_connection, DB_PATH
-from spend_sleuth.detect import find_duplicate_candidates, find_unusual_amount_candidates
+from spend_sleuth.detect import find_duplicate_candidates, find_unusual_amount_candidates, find_subscription_candidates
 from spend_sleuth.agent.run import investigate
 
 _CACHE_PATH = DB_PATH.parent / "investigation_cache.json"
@@ -29,6 +29,16 @@ def _save_cache(cache: dict) -> None:
 @st.cache_resource
 def get_conn():
     return get_connection(DB_PATH, read_only=True)
+
+
+@st.cache_data
+def load_subscription_candidates(card_no, category, description_search) -> list[dict]:
+    return find_subscription_candidates(
+        get_conn(),
+        card_no=card_no or None,
+        category=category or None,
+        description_search=description_search or None,
+    )
 
 
 @st.cache_data
@@ -392,3 +402,61 @@ else:
 
     for c in unusual_candidates:
         _render_unusual_candidate(c)
+
+st.divider()
+
+# --- Forgotten subscription candidates ---
+st.subheader("Forgotten Subscription Candidates")
+
+subscription_candidates = load_subscription_candidates(
+    selected_card if selected_card != "All" else "",
+    selected_category if selected_category != "All" else "",
+    search,
+)
+
+if not subscription_candidates:
+    st.info("No subscription candidates detected.")
+else:
+    st.caption(f"{len(subscription_candidates)} candidate(s) — merchants with regular recurring charges")
+
+    def _render_subscription_candidate(c: dict) -> None:
+        t = c["transaction"]
+        key = f"sub_{c['normalized_merchant']}"
+        label = (
+            f"{c['normalized_merchant']}  —  "
+            f"{c['pattern']}  |  ${c['typical_amount']:.2f}/charge  |  "
+            f"{c['charge_count']} charges  |  ${c['total_spent']:.2f} total"
+        )
+        with st.expander(label, expanded=True):
+            col_info, col_stats = st.columns(2)
+            with col_info:
+                st.markdown("**Most Recent Charge**")
+                st.write(t)
+            with col_stats:
+                st.markdown("**Subscription Pattern**")
+                st.metric("Pattern", c["pattern"].capitalize())
+                st.metric("Avg interval", f"{c['mean_interval_days']:.0f} days")
+                st.metric("Typical amount", f"${c['typical_amount']:.2f}")
+                st.metric("Total charges", c["charge_count"])
+                st.metric("Total spent", f"${c['total_spent']:.2f}")
+                st.caption(f"Active since {c['first_charge']}")
+            st.divider()
+            cached = st.session_state.investigations.get(key)
+            if cached:
+                if st.button("Re-investigate", key=f"btn_{key}"):
+                    with st.spinner("Running agent investigation…"):
+                        result = investigate(c, get_conn(), use_stub=use_stub)
+                    st.session_state.investigations[key] = result
+                    _save_cache(st.session_state.investigations)
+                    st.rerun()
+                _render_investigation(cached)
+            else:
+                if st.button("Investigate", key=f"btn_{key}"):
+                    with st.spinner("Running agent investigation…"):
+                        result = investigate(c, get_conn(), use_stub=use_stub)
+                    st.session_state.investigations[key] = result
+                    _save_cache(st.session_state.investigations)
+                    st.rerun()
+
+    for c in subscription_candidates:
+        _render_subscription_candidate(c)

@@ -104,6 +104,11 @@ uv run --env-file .env streamlit run src/spend_sleuth/app.py
 
 Features: date range presets (30d/60d/90d/YTD), card/category/description filters, monthly spend chart, category breakdown, transaction table, duplicate candidates section with per-pair Investigate buttons. Investigation results cached to `investigation_cache.json`. Stub mode on by default; toggle off with `ANTHROPIC_API_KEY` set.
 
+## Git Conventions
+- Never commit directly to main
+- Always create a feature branch before starting work: `git checkout -b <type>/<short-description>`
+- Commit incrementally after each logical unit of work — not everything at the end
+
 ## Off-limits
 
 Never read files under `data/`. This directory contains real personal financial data and is gitignored for that reason. Infer the CSV schema from the documentation in this file only. This applies to all tools: `Read`, `Bash` (`cat`, `head`, etc.), and any MCP file tools.
