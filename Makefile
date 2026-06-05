@@ -4,6 +4,9 @@ ECR_REPO    := spend-sleuth
 IMAGE_TAG   := latest
 ECR_URI     := $(AWS_ACCOUNT).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO)
 
+ECS_CLUSTER := default
+ECS_SERVICE := spend-sleuth-78b0
+
 .PHONY: build run ecr-create ecr-login push deploy
 
 ## Build the Docker image locally (linux/amd64 for Fargate compatibility)
@@ -37,3 +40,9 @@ push:
 ## Build, login, and push in one step
 deploy: build ecr-login push
 	@echo "Pushed $(ECR_URI):$(IMAGE_TAG)"
+
+## Force ECS to pull the new image and restart tasks
+cycle:
+	aws ecs update-service --cluster $(ECS_CLUSTER) --service $(ECS_SERVICE) --force-new-deployment
+	aws ecs wait services-stable --cluster $(ECS_CLUSTER) --service $(ECS_SERVICE)
+	@echo "Service stable on new deployment"

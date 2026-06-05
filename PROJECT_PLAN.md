@@ -113,17 +113,20 @@ The `investigation_trace` is the demo differentiator. Most LLM demos hide the ag
 
 **Checkpoint:** ✅ flagged transaction renders an agent trace. ✅ Live public URL on ECS Express Mode.
 
-### Week 2: Depth + Completeness (10-12 hrs)
+### Week 2: Depth + Completeness (10-12 hrs) — In Progress
 
 *Goal: full system, all 3 alert types, all tools, eval baselines.*
 
-- Detection layer v1: add remaining 2 alert types (unusual amount, forgotten subscription). (3h)
-- Add remaining agent tools: `get_recurring_pattern`, `get_user_context`. Decide on `lookup_merchant` based on time. (2h)
-- Agent prompt tuning: structured output schema, verdict logic, explanation quality. (2h)
-- Hand-label eval data: ~30 transactions for detection truth, ~15-20 investigations for verdict accuracy. (2h)
-- Eval harness v0: run agent over labeled set, score verdicts, log traces. (1-2h)
+- ✅ Detection layer v1: all 3 alert types complete.
+  - PR #1: `find_unusual_amount_candidates()` — z-score (high-side only, z≥2.0, $10 floor, 1-year baseline, min 5 txns). Includes `build_canonical_merchant_map()` — fuzzy union-find clustering (stdlib `difflib`) applied to both detectors. New `normalization-report` CLI command. 10 tests.
+  - PR #2: `find_subscription_candidates()` — CV < 0.3 regularity filter, ≥3 charges, ≥60 day span, multi-bucket pattern matching (weekly/biweekly/monthly/quarterly/etc). 8 tests.
+- ✅ All 3 agent tools implemented, tested, and wired end-to-end (PR #3: 65 total tests; PR #4: dynamic lookback, anonymized output).
+- ✅ Agent robustness: Pydantic verdict validation, JSON parsing fallback, Decimal serialization fixes, subscription/duplicate cross-detection fix (PRs #1, #4).
+- ✅ `lookup_merchant` — decided against; canonical map covers normalization.
+- ⏳ Hand-label eval data: ~30 transactions for detection truth, ~15-20 investigations for verdict accuracy. (2h)
+- ⏳ Eval harness v0: run agent over labeled set, score verdicts, log traces. (1-2h)
 
-**Checkpoint:** all 3 alert types working through agent. Eval baselines exist. Re-deploy.
+**Checkpoint:** ✅ All 3 alert types working through agent. ⏳ Eval baselines not yet started.
 
 ### Week 3: Eval Rigor + Demo + Writeup (10-15 hrs)
 
