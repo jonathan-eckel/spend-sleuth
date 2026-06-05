@@ -325,12 +325,37 @@ def test_subscription_detects_weekly_pattern(conn):
     assert results[0]["pattern"] == "weekly"
 
 
+def test_subscription_detects_biweekly_pattern(conn):
+    _insert_recurring(conn, "BIWEEKLY SVC", 10.00, interval_days=14, count=8)
+
+    results = find_subscription_candidates(conn, min_span_days=60)
+    assert len(results) == 1
+    assert results[0]["pattern"] == "biweekly"
+
+
 def test_subscription_detects_quarterly_pattern(conn):
     _insert_recurring(conn, "QUARTERLY SVC", 50.00, interval_days=90, count=5)
 
     results = find_subscription_candidates(conn)
     assert len(results) == 1
     assert results[0]["pattern"] == "quarterly"
+
+
+def test_subscription_detects_semi_annual_pattern(conn):
+    _insert_recurring(conn, "SEMI ANNUAL SVC", 100.00, interval_days=180, count=4)
+
+    results = find_subscription_candidates(conn)
+    assert len(results) == 1
+    assert results[0]["pattern"] == "semi-annual"
+
+
+def test_subscription_detects_annual_pattern(conn):
+    # 3 annual charges span 730 days — must extend lookback beyond default 400
+    _insert_recurring(conn, "ANNUAL SVC", 200.00, interval_days=365, count=3)
+
+    results = find_subscription_candidates(conn, lookback_days=800)
+    assert len(results) == 1
+    assert results[0]["pattern"] == "annual"
 
 
 def test_subscription_sorted_by_total_spent(conn):
