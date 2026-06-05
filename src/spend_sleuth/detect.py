@@ -350,9 +350,9 @@ def find_subscription_candidates(
     the coefficient of variation (CV = stddev/mean) of inter-charge intervals is below
     `cv_threshold`, and the charges span at least `min_span_days`.
 
-    CV measures how clock-like a pattern is relative to its own cadence: a monthly
-    subscription charging ±2 days has CV ≈ 0.07; an irregular vendor charging every
-    2–8 weeks has CV ≈ 0.5+.
+    Coefficient of variation measures how clock-like a pattern is relative to its own
+    cadence: a monthly subscription charging ±2 days has CV ≈ 0.07; an irregular vendor
+    charging every 2–8 weeks has CV ≈ 0.5+.
     """
     from collections import defaultdict
     from datetime import date as date_type
