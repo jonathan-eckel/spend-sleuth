@@ -339,7 +339,6 @@ def find_subscription_candidates(
     lookback_days: int = 400,   # 400d: enough to catch quarterly (3×90d=270d) with buffer for annual
     min_charges: int = 3,
     cv_threshold: float = 0.3,  # coefficient of variation (stddev/mean) of intervals; < 0.3 = "clock-like"
-    min_span_days: int = 60,    # coupled to min_charges: 3 monthly charges span exactly 60d (2 intervals)
     card_no: str | None = None,
     category: str | None = None,
     description_search: str | None = None,
@@ -415,15 +414,17 @@ def find_subscription_candidates(
         amounts = [c["debit"] for c in charges]
         intervals = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
 
-        if (dates[-1] - dates[0]).days < min_span_days:
-            continue
-
         mean_interval = sum(intervals) / len(intervals)
         variance = sum((x - mean_interval) ** 2 for x in intervals) / len(intervals)
         stddev = variance ** 0.5
         cv = stddev / mean_interval if mean_interval > 0 else 1.0
 
         if cv >= cv_threshold:
+            continue
+
+        # Require at least 2 full cycles at this cadence rather than a fixed 60 days.
+        # The old fixed threshold excluded weekly subs (7d × 2 = 14d needed, not 60d).
+        if (dates[-1] - dates[0]).days < mean_interval * 2:
             continue
 
         # Bucket by mean interval; thresholds are midpoints between canonical cadences
@@ -456,3 +457,18 @@ def find_subscription_candidates(
         })
 
     return sorted(results, key=lambda r: r["total_spent"], reverse=True)
+
+
+def suppress_subscription_duplicates(
+    dup_candidates: list[dict],
+    sub_candidates: list[dict],
+) -> list[dict]:
+    """Drop duplicate candidates whose merchant is already a known subscription.
+
+    A weekly subscription fires every ~7 days at the same amount, so consecutive
+    charges satisfy the duplicate detector's window and tolerance. Since those
+    charges are expected, remove them from the duplicate alert list when the
+    merchant is confirmed recurring.
+    """
+    sub_merchants = {c["normalized_merchant"] for c in sub_candidates}
+    return [c for c in dup_candidates if c["normalized_merchant"] not in sub_merchants]

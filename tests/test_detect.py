@@ -1,6 +1,6 @@
 import pytest
 from datetime import date
-from spend_sleuth.detect import normalize_merchant, find_duplicate_candidates, find_unusual_amount_candidates, find_subscription_candidates, build_canonical_merchant_map
+from spend_sleuth.detect import normalize_merchant, find_duplicate_candidates, find_unusual_amount_candidates, find_subscription_candidates, suppress_subscription_duplicates, build_canonical_merchant_map
 from tests.conftest import insert_transaction
 
 
@@ -249,6 +249,72 @@ def test_canonical_map_transitivity(conn):
     assert cmap["ACME STORE"] == cmap["ACME STORES"] == cmap["ACME STORED"] == "ACME STORE"
 
 
+# --- suppress_subscription_duplicates ---
+
+def _make_dup(merchant: str) -> dict:
+    return {"alert_type": "duplicate", "normalized_merchant": merchant, "is_omny": False}
+
+
+def _make_sub(merchant: str) -> dict:
+    return {"alert_type": "subscription", "normalized_merchant": merchant}
+
+
+def test_suppress_removes_subscription_merchant():
+    dups = [_make_dup("NETFLIX"), _make_dup("RANDOM CHARGE")]
+    subs = [_make_sub("NETFLIX")]
+    result = suppress_subscription_duplicates(dups, subs)
+    assert len(result) == 1
+    assert result[0]["normalized_merchant"] == "RANDOM CHARGE"
+
+
+def test_suppress_keeps_all_when_no_subscriptions():
+    dups = [_make_dup("MERCHANT A"), _make_dup("MERCHANT B")]
+    result = suppress_subscription_duplicates(dups, [])
+    assert len(result) == 2
+
+
+def test_suppress_empty_dups():
+    subs = [_make_sub("NETFLIX")]
+    assert suppress_subscription_duplicates([], subs) == []
+
+
+def test_suppress_non_subscription_dup_untouched():
+    dups = [_make_dup("CORNER STORE")]
+    subs = [_make_sub("NETFLIX")]
+    result = suppress_subscription_duplicates(dups, subs)
+    assert result == dups
+
+
+
+def test_weekly_subscription_detected_despite_short_span(conn):
+    """Weekly sub with <60 day span must reach subscription_candidates so it can be suppressed."""
+    # 5 charges every 7 days = 28-day span, well below the old 60-day threshold.
+    # The duplicate detector catches each consecutive pair (7 days apart, $0 diff).
+    from datetime import date, timedelta
+    base = date(2025, 3, 3)
+    for i in range(5):
+        insert_transaction(
+            conn,
+            description="WEEKLY YOGA",
+            debit=25.00,
+            transaction_date=(base + timedelta(days=i * 7)).isoformat(),
+            file_row=i,
+        )
+
+    subs = find_subscription_candidates(conn)
+    sub_merchants = {s["normalized_merchant"] for s in subs}
+    assert "WEEKLY YOGA" in sub_merchants
+
+    dups = find_duplicate_candidates(conn)
+    non_omny = [d for d in dups if not d["is_omny"]]
+    assert any(d["normalized_merchant"] == "WEEKLY YOGA" for d in non_omny), \
+        "duplicate detector should flag consecutive weekly charges"
+
+    suppressed = suppress_subscription_duplicates(non_omny, subs)
+    assert not any(d["normalized_merchant"] == "WEEKLY YOGA" for d in suppressed), \
+        "weekly subscription pairs should be suppressed from duplicate candidates"
+
+
 # --- find_subscription_candidates ---
 
 def _insert_recurring(conn, description, amount, interval_days, count, start_date="2025-01-01", file_row_offset=0):
@@ -309,26 +375,28 @@ def test_subscription_requires_min_charges(conn):
     assert len(results) == 0
 
 
-def test_subscription_requires_min_span(conn):
-    # 4 charges at 7-day intervals = 21-day span, below default min_span_days=60
-    _insert_recurring(conn, "WEEKLY APP", 5.00, interval_days=7, count=4)
+def test_subscription_requires_two_full_cycles(conn):
+    # 2 charges = 1 interval, span < mean_interval * 2 — not enough evidence
+    _insert_recurring(conn, "WEEKLY APP", 5.00, interval_days=7, count=2)
 
-    results = find_subscription_candidates(conn, min_span_days=60)
+    results = find_subscription_candidates(conn, min_charges=3)
     assert len(results) == 0
 
 
 def test_subscription_detects_weekly_pattern(conn):
-    _insert_recurring(conn, "WEEKLY APP", 5.00, interval_days=7, count=10)
+    # 4 charges at 7-day intervals = 21-day span; passes mean_interval * 2 = 14d threshold
+    _insert_recurring(conn, "WEEKLY APP", 5.00, interval_days=7, count=4)
 
-    results = find_subscription_candidates(conn, min_span_days=60)
+    results = find_subscription_candidates(conn)
     assert len(results) == 1
+    assert results[0]["pattern"] == "weekly"
     assert results[0]["pattern"] == "weekly"
 
 
 def test_subscription_detects_biweekly_pattern(conn):
     _insert_recurring(conn, "BIWEEKLY SVC", 10.00, interval_days=14, count=8)
 
-    results = find_subscription_candidates(conn, min_span_days=60)
+    results = find_subscription_candidates(conn)
     assert len(results) == 1
     assert results[0]["pattern"] == "biweekly"
 
