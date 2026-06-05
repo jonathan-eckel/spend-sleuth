@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .db import get_connection, init_schema, DB_PATH
 from .load import load_directory, load_csv
-from .detect import find_duplicate_candidates, find_unusual_amount_candidates, find_subscription_candidates, normalize_merchant, build_canonical_merchant_map
+from .detect import find_duplicate_candidates, find_unusual_amount_candidates, find_subscription_candidates, suppress_subscription_duplicates, normalize_merchant, build_canonical_merchant_map
 
 
 @click.group()
@@ -72,14 +72,17 @@ def detect(db: Path | None, window: int, tolerance: float, start, end):
     start_date = start.date() if start else None
     end_date = end.date() if end else None
     try:
-        dup_candidates = find_duplicate_candidates(
-            conn, window_days=window, amount_tolerance=tolerance,
-            start_date=start_date, end_date=end_date,
+        subscription_candidates = find_subscription_candidates(conn)
+        dup_candidates = suppress_subscription_duplicates(
+            find_duplicate_candidates(
+                conn, window_days=window, amount_tolerance=tolerance,
+                start_date=start_date, end_date=end_date,
+            ),
+            subscription_candidates,
         )
         unusual_candidates = find_unusual_amount_candidates(
             conn, start_date=start_date, end_date=end_date,
         )
-        subscription_candidates = find_subscription_candidates(conn)
     finally:
         conn.close()
 
