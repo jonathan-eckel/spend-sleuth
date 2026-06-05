@@ -7,7 +7,7 @@ import pandas as pd
 import altair as alt
 
 from spend_sleuth.db import get_connection, DB_PATH
-from spend_sleuth.detect import find_duplicate_candidates, find_unusual_amount_candidates, find_subscription_candidates
+from spend_sleuth.detect import find_duplicate_candidates, find_unusual_amount_candidates, find_subscription_candidates, suppress_subscription_duplicates
 from spend_sleuth.agent.run import investigate
 
 _CACHE_PATH = DB_PATH.parent / "investigation_cache.json"
@@ -109,7 +109,7 @@ def _render_investigation(result: dict) -> None:
         f"**Confidence:** {result.get('confidence', 0):.0%}  &nbsp;&nbsp; "
         f"**Action:** {action_emoji} {action}"
     )
-    st.markdown(f"_{result.get('explanation', '')}_")
+    st.markdown(result.get('explanation', ''))
 
     evidence = result.get("evidence", [])
     if evidence:
@@ -283,12 +283,21 @@ st.subheader("Duplicate Charge Candidates")
 if "investigations" not in st.session_state:
     st.session_state.investigations = _load_cache()
 
-candidates = load_duplicate_candidates(
-    date_range[0] if len(date_range) == 2 else date_min,
-    date_range[1] if len(date_range) == 2 else date_max,
+subscription_candidates = load_subscription_candidates(
     selected_card if selected_card != "All" else "",
     selected_category if selected_category != "All" else "",
     search,
+)
+
+candidates = suppress_subscription_duplicates(
+    load_duplicate_candidates(
+        date_range[0] if len(date_range) == 2 else date_min,
+        date_range[1] if len(date_range) == 2 else date_max,
+        selected_card if selected_card != "All" else "",
+        selected_category if selected_category != "All" else "",
+        search,
+    ),
+    subscription_candidates,
 )
 
 if not candidates:
@@ -302,7 +311,7 @@ else:
         a, b = c["txn_a"], c["txn_b"]
         key = f"{a['row_hash']}_{b['row_hash']}"
         label = f"{c['normalized_merchant']}  —  ${a['debit']:.2f}  |  {c['days_apart']} day(s) apart"
-        with st.expander(label, expanded=True):
+        with st.expander(label, expanded=False):
             col_a, col_b = st.columns(2)
             with col_a:
                 st.markdown("**Transaction A**")
@@ -371,7 +380,7 @@ else:
             f"${t['debit']:.2f} vs. typical ${s['mean']:.2f}  |  "
             f"z={c['z_score']:.2f}  |  {t['transaction_date']}"
         )
-        with st.expander(label, expanded=True):
+        with st.expander(label, expanded=False):
             col_amt, col_stats = st.columns(2)
             with col_amt:
                 st.markdown("**Flagged Transaction**")
@@ -408,12 +417,6 @@ st.divider()
 # --- Forgotten subscription candidates ---
 st.subheader("Forgotten Subscription Candidates")
 
-subscription_candidates = load_subscription_candidates(
-    selected_card if selected_card != "All" else "",
-    selected_category if selected_category != "All" else "",
-    search,
-)
-
 if not subscription_candidates:
     st.info("No subscription candidates detected.")
 else:
@@ -427,7 +430,7 @@ else:
             f"{c['pattern']}  |  ${c['typical_amount']:.2f}/charge  |  "
             f"{c['charge_count']} charges  |  ${c['total_spent']:.2f} total"
         )
-        with st.expander(label, expanded=True):
+        with st.expander(label, expanded=False):
             col_info, col_stats = st.columns(2)
             with col_info:
                 st.markdown("**Most Recent Charge**")
