@@ -1,0 +1,172 @@
+"""Tests for the demo-data generator.
+
+Unit tests cover deterministic anonymization and the hash refactor. The
+end-to-end tests are the real value: each preset is written to a temp DuckDB
+and the matching detector is run to confirm the engineered alert actually
+fires.
+"""
+from datetime import date
+
+import duckdb
+import pytest
+
+from spend_sleuth.db import get_connection, init_schema
+from spend_sleuth.detect import (
+    find_duplicate_candidates,
+    find_subscription_candidates,
+    find_unusual_amount_candidates,
+    normalize_merchant,
+)
+from spend_sleuth.load import compute_row_hash
+from spend_sleuth import demo_gen
+
+
+# --- Fixtures ---------------------------------------------------------------
+
+BASE = {
+    "transaction_date": date(2025, 6, 1),
+    "card_no": "1234",
+    "description": "TRADER JOE'S #142",
+    "category": "Groceries",
+    "debit": 50.00,
+}
+
+
+@pytest.fixture
+def demo_db(tmp_path):
+    """Path to an isolated demo DB under tmp_path."""
+    return tmp_path / "builder.db"
+
+
+def _open(db_path) -> duckdb.DuckDBPyConnection:
+    return get_connection(db_path, read_only=True)
+
+
+# --- Anonymization ----------------------------------------------------------
+
+def test_anonymize_card_is_deterministic_and_scrubs_original():
+    out = demo_gen.anonymize_card("1234")
+    assert out == demo_gen.anonymize_card("1234")
+    assert out.startswith("DEMO-")
+    assert "1234" not in out
+
+
+def test_anonymize_card_distinguishes_cards():
+    assert demo_gen.anonymize_card("1234") != demo_gen.anonymize_card("5678")
+
+
+def test_anonymize_merchant_is_deterministic_and_scrubs_original():
+    raw = "TRADER JOE'S #142"
+    out = demo_gen.anonymize_merchant(raw)
+    assert out == demo_gen.anonymize_merchant(raw)
+    # The real, distinctive merchant string is gone (a generic brand word like
+    # "TRADERS" may coincidentally appear, but the merchant isn't recoverable).
+    assert out != normalize_merchant(raw)
+    assert "JOE" not in out
+
+
+def test_anonymize_merchant_collapses_store_number_variants():
+    # Store-number variants normalize to the same merchant, so same fake brand.
+    assert demo_gen.anonymize_merchant("TRADER JOE'S #142") == \
+        demo_gen.anonymize_merchant("TRADER JOE'S #99")
+
+
+# --- Hash refactor ----------------------------------------------------------
+
+def test_compute_row_hash_matches_known_value():
+    fields = {
+        "transaction_date": "2025-01-01",
+        "posted_date": "2025-01-02",
+        "card_no": "1234",
+        "description": "TEST MERCHANT",
+        "debit": 10.0,
+        "credit": None,
+        "source_file": "test.csv",
+        "file_row": 0,
+    }
+    import hashlib
+    key = "|".join(str(fields[c]) for c in [
+        "transaction_date", "posted_date", "card_no",
+        "description", "debit", "credit", "source_file", "file_row",
+    ])
+    expected = hashlib.sha256(key.encode()).hexdigest()
+    assert compute_row_hash(fields) == expected
+
+
+# --- Preset generators (end-to-end against detectors) -----------------------
+
+def test_gen_duplicate_trips_duplicate_detector(demo_db):
+    rows = demo_gen.gen_duplicate(BASE)
+    inserted = demo_gen.write_demo_rows(rows, demo_db)
+    assert inserted == len(rows)
+
+    conn = _open(demo_db)
+    cands = find_duplicate_candidates(conn)
+    conn.close()
+
+    assert cands, "expected a duplicate candidate"
+    c = cands[0]
+    assert c["amount_diff"] == 0.0
+    assert c["days_apart"] == 0
+    assert not c["is_omny"]
+    assert c["normalized_merchant"] == normalize_merchant(rows[0]["description"])
+
+
+def test_gen_unusual_amount_trips_unusual_detector(demo_db):
+    rows = demo_gen.gen_unusual_amount(BASE, multiplier=3.0)
+    demo_gen.write_demo_rows(rows, demo_db)
+
+    conn = _open(demo_db)
+    cands = find_unusual_amount_candidates(conn)
+    conn.close()
+
+    assert cands, "expected an unusual-amount candidate"
+    spike = max(cands, key=lambda c: c["z_score"])
+    assert spike["z_score"] >= 2.0
+    # The flagged transaction should be the spike (3x baseline = $150).
+    assert spike["transaction"]["debit"] == pytest.approx(150.0)
+
+
+@pytest.mark.parametrize("pattern", ["weekly", "monthly", "quarterly"])
+def test_gen_subscription_trips_subscription_detector(demo_db, pattern):
+    rows = demo_gen.gen_subscription(BASE, pattern=pattern, count=6)
+    demo_gen.write_demo_rows(rows, demo_db)
+
+    conn = _open(demo_db)
+    cands = find_subscription_candidates(conn)
+    conn.close()
+
+    assert cands, f"expected a subscription candidate for {pattern}"
+    c = cands[0]
+    assert c["cv"] < 0.3
+    assert c["pattern"] == pattern
+    # Quarterly×6 spans >400d (the detector's lookback), so a couple of the
+    # oldest charges fall outside the window — just confirm enough remain.
+    assert c["charge_count"] >= 3
+
+
+# --- Persistence ------------------------------------------------------------
+
+def test_write_demo_rows_is_idempotent(demo_db):
+    rows = demo_gen.gen_duplicate(BASE)
+    assert demo_gen.write_demo_rows(rows, demo_db) == len(rows)
+    # Re-writing identical rows inserts nothing.
+    assert demo_gen.write_demo_rows(rows, demo_db) == 0
+
+
+def test_write_demo_rows_accumulates_distinct_series(demo_db):
+    demo_gen.write_demo_rows(demo_gen.gen_duplicate(BASE), demo_db)
+    other = {**BASE, "description": "WHOLE FOODS MARKET", "card_no": "5678"}
+    demo_gen.write_demo_rows(demo_gen.gen_duplicate(other), demo_db)
+    assert demo_gen.demo_db_count(demo_db) == 4
+
+
+def test_clear_demo_db_empties_dataset(demo_db):
+    demo_gen.write_demo_rows(demo_gen.gen_duplicate(BASE), demo_db)
+    assert demo_gen.demo_db_count(demo_db) > 0
+    demo_gen.clear_demo_db(demo_db)
+    assert demo_gen.demo_db_count(demo_db) == 0
+
+
+def test_demo_db_count_missing_file_is_zero(tmp_path):
+    assert demo_gen.demo_db_count(tmp_path / "nope.db") == 0

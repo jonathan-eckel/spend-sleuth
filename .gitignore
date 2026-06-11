@@ -2,6 +2,7 @@
 data/
 *.db
 !demo_data/demo.db
+!demo_data/builder.db
 scratch/
 memory/
 MEMORY.md
