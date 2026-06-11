@@ -1,4 +1,5 @@
 import hashlib
+from collections.abc import Mapping
 import pandas as pd
 from pathlib import Path
 
@@ -6,13 +7,24 @@ import duckdb
 
 from .db import get_connection, init_schema
 
+_HASH_FIELDS = [
+    "transaction_date", "posted_date", "card_no",
+    "description", "debit", "credit", "source_file", "file_row",
+]
+
+
+def compute_row_hash(fields: Mapping) -> str:
+    """SHA-256 of the canonical pipe-joined row fields.
+
+    `file_row` is part of the key so valid within-file duplicates (e.g. OMNY
+    taps) hash distinctly. Accepts any mapping (dict or pandas Series).
+    """
+    key = "|".join(str(fields[c]) for c in _HASH_FIELDS)
+    return hashlib.sha256(key.encode()).hexdigest()
+
 
 def _compute_hash(row: pd.Series) -> str:
-    key = "|".join(str(row[c]) for c in [
-        "transaction_date", "posted_date", "card_no",
-        "description", "debit", "credit", "source_file", "file_row",
-    ])
-    return hashlib.sha256(key.encode()).hexdigest()
+    return compute_row_hash(row)
 
 
 def load_csv(csv_path: Path, conn: duckdb.DuckDBPyConnection | None = None) -> int:
