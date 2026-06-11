@@ -1,7 +1,7 @@
 """Case schema for the eval set.
 
 Canonical, machine-enforced shape of an eval row. The verdict *semantics* and
-labeling rules live in ``src/verdict.md``; this module enforces *structure* so
+labeling rules live in ``src/spend_sleuth/evals/verdict.md``; this module enforces *structure* so
 the loader, the gold rows, and the agent's input cannot silently drift.
 
 The evidence a case carries depends on its ``alert_type``, so ``Case`` is a
