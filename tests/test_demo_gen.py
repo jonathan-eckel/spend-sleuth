@@ -166,6 +166,26 @@ def test_gen_subscription_trips_subscription_detector(demo_db, pattern):
 
 # --- Persistence ------------------------------------------------------------
 
+def test_seed_preset_from_multiple_bases(demo_db):
+    # The UI seeds the series from every selected row: applying a preset to each
+    # base and concatenating yields one alert per distinct merchant.
+    bases = [
+        {"transaction_date": date(2025, 6, 1), "card_no": "A",
+         "description": "SHOP ONE", "category": "Dining", "debit": 10.0},
+        {"transaction_date": date(2025, 6, 2), "card_no": "B",
+         "description": "SHOP TWO", "category": "Dining", "debit": 20.0},
+    ]
+    rows = []
+    for b in bases:
+        rows += demo_gen.gen_duplicate(b, anonymize=False)
+    assert demo_gen.write_demo_rows(rows, demo_db) == 4
+
+    conn = _open(demo_db)
+    cands = find_duplicate_candidates(conn)
+    conn.close()
+    assert {c["normalized_merchant"] for c in cands} == {"SHOP ONE", "SHOP TWO"}
+
+
 def test_write_demo_rows_is_idempotent(demo_db):
     rows = demo_gen.gen_duplicate(BASE)
     assert demo_gen.write_demo_rows(rows, demo_db) == len(rows)

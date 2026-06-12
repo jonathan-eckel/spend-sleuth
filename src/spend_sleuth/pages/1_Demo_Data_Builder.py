@@ -140,48 +140,51 @@ event = st.dataframe(
 
 selected_rows = event.selection.rows
 if not selected_rows:
-    st.info("Select at least one transaction to use as the template.")
+    st.info("Select one or more transactions to seed the demo series.")
     st.stop()
 
-template = picks.iloc[selected_rows[0]].to_dict()
-if len(selected_rows) > 1:
-    st.caption(
-        f"{len(selected_rows)} selected — the first (**{template['description']}**, "
-        f"${template['debit']:.2f}) is used as the template for the preset."
-    )
+bases = [picks.iloc[i].to_dict() for i in selected_rows]
+st.caption(f"{len(bases)} transaction(s) selected — the preset is applied to each.")
 
 # --- Step 2: anonymize ---
 st.subheader("2. Anonymize")
 st.caption(
-    "These values replace the real card and merchant on **every** generated row. "
-    "Pre-filled with deterministic anonymized defaults — edit freely."
+    "Each distinct real merchant/card below is replaced on **every** generated "
+    "row. Pre-filled with deterministic anonymized defaults — edit any value."
 )
-# Key the inputs to the template so picking a different transaction resets the
-# defaults (rather than keeping a stale edit from the previous selection).
-tmpl_key = f"{template['card_no']}|{template['description']}"
-acol1, acol2 = st.columns(2)
-anon_merchant = acol1.text_input(
-    "Merchant name",
-    value=demo_gen.anonymize_merchant(template["description"]),
-    key=f"anon_merchant::{tmpl_key}",
-    help=f"Original: {template['description']}",
-)
-anon_card = acol2.text_input(
-    "Card number",
-    value=demo_gen.anonymize_card(template["card_no"]),
-    key=f"anon_card::{tmpl_key}",
-    help=f"Original: {template['card_no']}",
-)
-if not anon_merchant.strip():
-    anon_merchant = demo_gen.anonymize_merchant(template["description"])
-    st.warning("Merchant name was empty — using the anonymized default.")
-if not anon_card.strip():
-    anon_card = demo_gen.anonymize_card(template["card_no"])
-    st.warning("Card number was empty — using the anonymized default.")
 
-# Base with the user's chosen (already-anonymized) card + merchant; generators
-# use it verbatim (anonymize=False) so the edits propagate to all rows.
-anon_base = {**template, "card_no": anon_card, "description": anon_merchant}
+# One mapping row per distinct (card, normalized merchant) among the picks.
+_seen: dict[tuple[str, str], dict] = {}
+for b in bases:
+    norm = demo_gen.normalize_merchant(b["description"])
+    key = (str(b["card_no"]), norm)
+    if key not in _seen:
+        _seen[key] = {
+            "Original merchant": norm,
+            "Original card": str(b["card_no"]),
+            "Anonymized merchant": demo_gen.anonymize_merchant(b["description"]),
+            "Anonymized card": demo_gen.anonymize_card(b["card_no"]),
+        }
+
+# Re-key the editor on the selection so changing picks resets the defaults
+# rather than keeping a stale edit from a previous selection.
+_sel_sig = "|".join(sorted(f"{c}~{m}" for c, m in _seen))
+edited_map = st.data_editor(
+    pd.DataFrame(list(_seen.values())),
+    hide_index=True,
+    use_container_width=True,
+    disabled=["Original merchant", "Original card"],
+    key=f"anon_map::{_sel_sig}",
+)
+
+# (real_card, real_norm_merchant) -> (fake_card, fake_merchant); cleared cells
+# fall back to the anonymized default.
+anon_map: dict[tuple[str, str], tuple[str, str]] = {}
+for _, r in edited_map.iterrows():
+    real_card, real_norm = str(r["Original card"]), str(r["Original merchant"])
+    fake_merchant = str(r["Anonymized merchant"]).strip() or demo_gen.anonymize_merchant(real_norm)
+    fake_card = str(r["Anonymized card"]).strip() or demo_gen.anonymize_card(real_card)
+    anon_map[(real_card, real_norm)] = (fake_card, fake_merchant)
 
 # --- Step 3: shape into an alert ---
 st.subheader("3. Shape into a stronger alert")
@@ -197,28 +200,31 @@ if alert_type == "Duplicate charge":
     copies = c1.number_input("Copies", min_value=2, max_value=10, value=2)
     days_apart = c2.number_input("Days apart", min_value=0, max_value=7, value=0)
     amount_diff = c3.number_input("Amount diff ($)", min_value=0.0, max_value=10.0, value=0.0, step=0.25)
-    generated = demo_gen.gen_duplicate(
-        anon_base, copies=int(copies), days_apart=int(days_apart),
-        amount_diff=float(amount_diff), anonymize=False,
-    )
+    gen_fn = demo_gen.gen_duplicate
+    gen_params = dict(copies=int(copies), days_apart=int(days_apart), amount_diff=float(amount_diff))
 elif alert_type == "Unusual amount":
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     history = c1.number_input("History charges", min_value=5, max_value=40, value=8)
     multiplier = c2.number_input("Spike multiplier", min_value=2.0, max_value=20.0, value=3.0, step=0.5)
-    baseline = c3.number_input(
-        "Baseline amount ($)", min_value=1.0, value=float(template["debit"]), step=1.0
-    )
-    generated = demo_gen.gen_unusual_amount(
-        anon_base, history=int(history), multiplier=float(multiplier),
-        baseline=float(baseline), anonymize=False,
-    )
+    # Baseline is each picked row's own amount (the spike = baseline × multiplier).
+    gen_fn = demo_gen.gen_unusual_amount
+    gen_params = dict(history=int(history), multiplier=float(multiplier))
 else:
     c1, c2 = st.columns(2)
     pattern = c1.selectbox("Cadence", list(demo_gen.PATTERN_INTERVAL_DAYS.keys()), index=2)
     count = c2.number_input("Number of charges", min_value=3, max_value=24, value=6)
-    generated = demo_gen.gen_subscription(
-        anon_base, pattern=pattern, count=int(count), anonymize=False,
-    )
+    gen_fn = demo_gen.gen_subscription
+    gen_params = dict(pattern=pattern, count=int(count))
+
+# Apply the preset to every selected row, using its mapped anonymized identity.
+generated: list[dict] = []
+for b in bases:
+    norm = demo_gen.normalize_merchant(b["description"])
+    fake_card, fake_merchant = anon_map[(str(b["card_no"]), norm)]
+    anon_base = {**b, "card_no": fake_card, "description": fake_merchant}
+    generated += gen_fn(anon_base, anonymize=False, **gen_params)
+
+st.caption(f"{len(generated)} row(s) generated from {len(bases)} selection(s).")
 
 # --- Step 4: preview & edit ---
 st.subheader("4. Preview & edit")
