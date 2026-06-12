@@ -150,8 +150,41 @@ if len(selected_rows) > 1:
         f"${template['debit']:.2f}) is used as the template for the preset."
     )
 
-# --- Step 2: shape into an alert ---
-st.subheader("2. Shape into a stronger alert")
+# --- Step 2: anonymize ---
+st.subheader("2. Anonymize")
+st.caption(
+    "These values replace the real card and merchant on **every** generated row. "
+    "Pre-filled with deterministic anonymized defaults — edit freely."
+)
+# Key the inputs to the template so picking a different transaction resets the
+# defaults (rather than keeping a stale edit from the previous selection).
+tmpl_key = f"{template['card_no']}|{template['description']}"
+acol1, acol2 = st.columns(2)
+anon_merchant = acol1.text_input(
+    "Merchant name",
+    value=demo_gen.anonymize_merchant(template["description"]),
+    key=f"anon_merchant::{tmpl_key}",
+    help=f"Original: {template['description']}",
+)
+anon_card = acol2.text_input(
+    "Card number",
+    value=demo_gen.anonymize_card(template["card_no"]),
+    key=f"anon_card::{tmpl_key}",
+    help=f"Original: {template['card_no']}",
+)
+if not anon_merchant.strip():
+    anon_merchant = demo_gen.anonymize_merchant(template["description"])
+    st.warning("Merchant name was empty — using the anonymized default.")
+if not anon_card.strip():
+    anon_card = demo_gen.anonymize_card(template["card_no"])
+    st.warning("Card number was empty — using the anonymized default.")
+
+# Base with the user's chosen (already-anonymized) card + merchant; generators
+# use it verbatim (anonymize=False) so the edits propagate to all rows.
+anon_base = {**template, "card_no": anon_card, "description": anon_merchant}
+
+# --- Step 3: shape into an alert ---
+st.subheader("3. Shape into a stronger alert")
 
 alert_type = st.radio(
     "Alert type",
@@ -165,7 +198,8 @@ if alert_type == "Duplicate charge":
     days_apart = c2.number_input("Days apart", min_value=0, max_value=7, value=0)
     amount_diff = c3.number_input("Amount diff ($)", min_value=0.0, max_value=10.0, value=0.0, step=0.25)
     generated = demo_gen.gen_duplicate(
-        template, copies=int(copies), days_apart=int(days_apart), amount_diff=float(amount_diff)
+        anon_base, copies=int(copies), days_apart=int(days_apart),
+        amount_diff=float(amount_diff), anonymize=False,
     )
 elif alert_type == "Unusual amount":
     c1, c2, c3 = st.columns(3)
@@ -175,24 +209,20 @@ elif alert_type == "Unusual amount":
         "Baseline amount ($)", min_value=1.0, value=float(template["debit"]), step=1.0
     )
     generated = demo_gen.gen_unusual_amount(
-        template, history=int(history), multiplier=float(multiplier), baseline=float(baseline)
+        anon_base, history=int(history), multiplier=float(multiplier),
+        baseline=float(baseline), anonymize=False,
     )
 else:
     c1, c2 = st.columns(2)
     pattern = c1.selectbox("Cadence", list(demo_gen.PATTERN_INTERVAL_DAYS.keys()), index=2)
     count = c2.number_input("Number of charges", min_value=3, max_value=24, value=6)
-    generated = demo_gen.gen_subscription(template, pattern=pattern, count=int(count))
+    generated = demo_gen.gen_subscription(
+        anon_base, pattern=pattern, count=int(count), anonymize=False,
+    )
 
-# Anonymization mapping (transparency).
-st.caption(
-    f"Anonymized: card `{template['card_no']}` → `{demo_gen.anonymize_card(template['card_no'])}`  |  "
-    f"merchant `{demo_gen.normalize_merchant(template['description'])}` → "
-    f"`{demo_gen.anonymize_merchant(template['description'])}`"
-)
-
-# --- Step 3: preview & edit ---
-st.subheader("3. Preview & edit")
-st.caption("Edit any cell before saving. Rows are re-hashed on save.")
+# --- Step 4: preview & edit ---
+st.subheader("4. Preview & edit")
+st.caption("Every field is editable. Add or remove rows too. Rows are re-hashed on save.")
 preview_df = pd.DataFrame(generated)[PREVIEW_COLUMNS]
 preview_df["transaction_date"] = pd.to_datetime(preview_df["transaction_date"])
 preview_df["posted_date"] = pd.to_datetime(preview_df["posted_date"])
@@ -205,8 +235,8 @@ edited = st.data_editor(
     key="demo_preview_editor",
 )
 
-# --- Step 4: save ---
-st.subheader("4. Save")
+# --- Step 5: save ---
+st.subheader("5. Save")
 if st.button("💾 Save to demo dataset", type="primary"):
     rows = _rows_from_editor(edited)
     inserted = demo_gen.write_demo_rows(rows)

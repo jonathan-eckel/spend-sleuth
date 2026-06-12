@@ -71,6 +71,25 @@ def test_anonymize_merchant_collapses_store_number_variants():
         demo_gen.anonymize_merchant("TRADER JOE'S #99")
 
 
+def test_generators_anonymize_by_default():
+    rows = demo_gen.gen_duplicate(BASE)
+    assert all(r["card_no"] == demo_gen.anonymize_card(BASE["card_no"]) for r in rows)
+    assert all(r["description"] == demo_gen.anonymize_merchant(BASE["description"]) for r in rows)
+
+
+def test_generators_honor_anonymize_false_override():
+    # When anonymize=False, the caller's card/merchant are used verbatim on every
+    # row (the UI uses this so a user-edited merchant name propagates).
+    base = {**BASE, "card_no": "DEMO-9999", "description": "MY CUSTOM SHOP"}
+    for rows in (
+        demo_gen.gen_duplicate(base, anonymize=False),
+        demo_gen.gen_unusual_amount(base, anonymize=False),
+        demo_gen.gen_subscription(base, anonymize=False),
+    ):
+        assert {r["card_no"] for r in rows} == {"DEMO-9999"}
+        assert {r["description"] for r in rows} == {"MY CUSTOM SHOP"}
+
+
 # --- Hash refactor ----------------------------------------------------------
 
 def test_compute_row_hash_matches_known_value():

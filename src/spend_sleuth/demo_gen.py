@@ -120,12 +120,17 @@ def make_row(
     return row
 
 
-def _base_fields(base: Mapping) -> dict:
-    """Pull and anonymize the fields we need from a picked base transaction."""
+def _base_fields(base: Mapping, *, anonymize: bool = True) -> dict:
+    """Pull the fields we need from a picked base transaction.
+
+    With ``anonymize=True`` (default) the card and merchant are scrubbed here.
+    Pass ``anonymize=False`` when the caller has already chosen the final card /
+    merchant values (e.g. the user edited them in the UI) so they're used as-is.
+    """
     return {
         "transaction_date": _to_date(base["transaction_date"]),
-        "card_no": anonymize_card(base["card_no"]),
-        "description": anonymize_merchant(base["description"]),
+        "card_no": anonymize_card(base["card_no"]) if anonymize else str(base["card_no"]),
+        "description": anonymize_merchant(base["description"]) if anonymize else str(base["description"]),
         "category": base.get("category") or "Uncategorized",
         "debit": float(base["debit"]),
     }
@@ -137,6 +142,7 @@ def gen_duplicate(
     copies: int = 2,
     days_apart: int = 0,
     amount_diff: float = 0.0,
+    anonymize: bool = True,
 ) -> list[dict]:
     """Clone a base transaction into near-identical charges (duplicate alert).
 
@@ -144,7 +150,7 @@ def gen_duplicate(
     same merchant, same amount, same day. `file_row` differs per copy so each
     row hashes distinctly.
     """
-    b = _base_fields(base)
+    b = _base_fields(base, anonymize=anonymize)
     rows = []
     for i in range(max(2, copies)):
         rows.append(make_row(
@@ -165,6 +171,7 @@ def gen_unusual_amount(
     baseline: float | None = None,
     multiplier: float = 3.0,
     spread: float = 0.05,
+    anonymize: bool = True,
 ) -> list[dict]:
     """Build a tight baseline history plus one spike charge (unusual-amount alert).
 
@@ -175,7 +182,7 @@ def gen_unusual_amount(
     The irregular spacing is deliberate: evenly-spaced history would also look
     like a subscription and co-fire that detector, muddying a single-alert demo.
     """
-    b = _base_fields(base)
+    b = _base_fields(base, anonymize=anonymize)
     base_amt = float(baseline) if baseline is not None else b["debit"]
     # Irregular gaps (days) break any clock-like cadence so the subscription
     # detector's interval CV stays above its 0.3 threshold.
@@ -219,6 +226,7 @@ def gen_subscription(
     pattern: str = "monthly",
     count: int = 6,
     jitter_days: int = 1,
+    anonymize: bool = True,
 ) -> list[dict]:
     """Generate a clock-like recurring series (forgotten-subscription alert).
 
@@ -227,7 +235,7 @@ def gen_subscription(
     exceeds two full cycles.
     """
     interval = PATTERN_INTERVAL_DAYS.get(pattern, 30)
-    b = _base_fields(base)
+    b = _base_fields(base, anonymize=anonymize)
     rows = []
     # Small alternating jitter pattern keeps stddev > 0 but CV tiny.
     jitter_cycle = [0, jitter_days, -jitter_days]
