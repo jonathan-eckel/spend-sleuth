@@ -102,6 +102,34 @@ if df.empty:
     st.warning("No transactions in the source database. Load some data first.")
     st.stop()
 
+# --- Current demo dataset preview ---
+# Read fresh each run (uncached) so it reflects saves/resets, which st.rerun().
+demo_df = demo_gen.read_demo_rows()
+with st.expander(f"📂 Current demo dataset ({len(demo_df):,} rows)", expanded=False):
+    if demo_df.empty:
+        st.caption(f"Empty — nothing saved yet. Target: `{demo_gen.DEMO_DB_PATH}`")
+    else:
+        st.dataframe(
+            demo_df,
+            use_container_width=True,
+            hide_index=True,
+            height=280,
+            column_config={
+                "transaction_date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
+                "card_no": st.column_config.TextColumn("Card"),
+                "description": st.column_config.TextColumn("Merchant"),
+                "category": st.column_config.TextColumn("Category"),
+                "debit": st.column_config.NumberColumn("Debit", format="$%.2f"),
+                "credit": st.column_config.NumberColumn("Credit", format="$%.2f"),
+            },
+        )
+        st.download_button(
+            "⬇ Download as CSV",
+            demo_df.to_csv(index=False),
+            file_name="demo_dataset.csv",
+            mime="text/csv",
+        )
+
 # --- Step 1: pick transactions ---
 st.subheader("1. Pick transactions for a merchant")
 
