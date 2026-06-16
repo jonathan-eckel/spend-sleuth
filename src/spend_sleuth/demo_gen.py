@@ -384,3 +384,29 @@ def demo_db_count(db_path: Path = DEMO_DB_PATH) -> int:
         return 0
     finally:
         conn.close()
+
+
+DEMO_PREVIEW_COLUMNS = [
+    "transaction_date", "card_no", "description", "category", "debit", "credit",
+]
+
+
+def read_demo_rows(db_path: Path = DEMO_DB_PATH) -> pd.DataFrame:
+    """Return the demo dataset's transactions as a DataFrame (newest first).
+
+    Empty DataFrame (with the expected columns) if the DB doesn't exist yet.
+    """
+    empty = pd.DataFrame(columns=DEMO_PREVIEW_COLUMNS)
+    if not Path(db_path).exists():
+        return empty
+    conn = get_connection(db_path, read_only=True)
+    try:
+        return conn.execute(f"""
+            SELECT {', '.join(DEMO_PREVIEW_COLUMNS)}
+            FROM transactions
+            ORDER BY transaction_date DESC
+        """).df()
+    except Exception:
+        return empty
+    finally:
+        conn.close()

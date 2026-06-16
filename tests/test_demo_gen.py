@@ -350,3 +350,16 @@ def test_clear_demo_db_empties_dataset(demo_db):
 
 def test_demo_db_count_missing_file_is_zero(tmp_path):
     assert demo_gen.demo_db_count(tmp_path / "nope.db") == 0
+
+
+def test_read_demo_rows(demo_db, tmp_path):
+    # Missing file → empty frame with the expected columns.
+    empty = demo_gen.read_demo_rows(tmp_path / "nope.db")
+    assert empty.empty
+    assert list(empty.columns) == demo_gen.DEMO_PREVIEW_COLUMNS
+
+    demo_gen.write_demo_rows(demo_gen.gen_duplicate(BASE), demo_db)
+    df = demo_gen.read_demo_rows(demo_db)
+    assert len(df) == 2
+    assert set(demo_gen.DEMO_PREVIEW_COLUMNS).issubset(df.columns)
+    assert df["description"].iloc[0] == demo_gen.anonymize_merchant(BASE["description"])
