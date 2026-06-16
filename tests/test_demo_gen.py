@@ -15,6 +15,7 @@ from spend_sleuth.detect import (
     find_duplicate_candidates,
     find_subscription_candidates,
     find_unusual_amount_candidates,
+    interval_to_pattern,
     normalize_merchant,
 )
 from spend_sleuth.load import compute_row_hash
@@ -88,6 +89,103 @@ def test_generators_honor_anonymize_false_override():
     ):
         assert {r["card_no"] for r in rows} == {"DEMO-9999"}
         assert {r["description"] for r in rows} == {"MY CUSTOM SHOP"}
+
+
+# --- Combine: inference helpers --------------------------------------------
+
+@pytest.mark.parametrize("days, expected", [
+    (7, "weekly"), (14, "biweekly"), (30, "monthly"),
+    (91, "quarterly"), (182, "semi-annual"), (365, "annual"),
+])
+def test_interval_to_pattern(days, expected):
+    assert interval_to_pattern(days) == expected
+
+
+def test_summarize_selection_infers_monthly_cadence_and_amount():
+    bases = [
+        {"transaction_date": date(2025, 1, 5), "debit": 15.49},
+        {"transaction_date": date(2025, 2, 4), "debit": 15.49},
+        {"transaction_date": date(2025, 3, 6), "debit": 15.49},
+        {"transaction_date": date(2025, 4, 5), "debit": 15.49},
+    ]
+    s = demo_gen.summarize_selection(bases)
+    assert s["count"] == 4
+    assert s["pattern"] == "monthly"
+    assert 28 <= s["mean_interval_days"] <= 31
+    assert s["mean_amount"] == pytest.approx(15.49)
+    assert s["last_date"] == date(2025, 4, 5)
+
+
+def test_infer_unusual_baseline_spike_uses_largest_as_spike():
+    bases = [
+        {"debit": 48.0}, {"debit": 50.0}, {"debit": 52.0}, {"debit": 210.0},
+    ]
+    baseline, spike = demo_gen.infer_unusual_baseline_spike(bases)
+    assert spike == 210.0
+    assert baseline == pytest.approx(50.0)  # mean of 48, 50, 52
+
+
+def test_gen_unusual_amount_spike_override():
+    rows = demo_gen.gen_unusual_amount(BASE, baseline=40.0, spike_amount=200.0)
+    # The final (anomaly) row uses the explicit spike, not baseline × multiplier.
+    assert rows[-1]["debit"] == pytest.approx(200.0)
+
+
+# --- Combine: end-to-end ----------------------------------------------------
+
+def test_combine_subscription_trips_detector_at_inferred_cadence(demo_db):
+    bases = [
+        {"transaction_date": date(2025, 1, 5), "card_no": "1234",
+         "description": "NETFLIX.COM", "category": "Entertainment", "debit": 15.49},
+        {"transaction_date": date(2025, 2, 4), "card_no": "1234",
+         "description": "NETFLIX.COM", "category": "Entertainment", "debit": 15.49},
+        {"transaction_date": date(2025, 3, 6), "card_no": "1234",
+         "description": "NETFLIX.COM", "category": "Entertainment", "debit": 15.49},
+    ]
+    s = demo_gen.summarize_selection(bases)
+    combined = {
+        "transaction_date": s["last_date"], "card_no": "DEMO-1",
+        "description": "WILLOW STREAM", "category": "Entertainment",
+        "debit": s["mean_amount"],
+    }
+    rows = demo_gen.gen_subscription(combined, pattern=s["pattern"], count=6, anonymize=False)
+    demo_gen.write_demo_rows(rows, demo_db)
+
+    conn = _open(demo_db)
+    cands = find_subscription_candidates(conn)
+    conn.close()
+    assert cands, "expected a subscription candidate"
+    assert cands[0]["pattern"] == "monthly"
+    assert cands[0]["cv"] < 0.3
+
+
+def test_combine_unusual_trips_detector_with_largest_as_spike(demo_db):
+    bases = [
+        {"transaction_date": date(2025, 5, 2), "card_no": "1234",
+         "description": "AMAZON.COM", "category": "Shopping", "debit": 48.0},
+        {"transaction_date": date(2025, 5, 12), "card_no": "1234",
+         "description": "AMAZON.COM", "category": "Shopping", "debit": 52.0},
+        {"transaction_date": date(2025, 6, 1), "card_no": "1234",
+         "description": "AMAZON.COM", "category": "Shopping", "debit": 200.0},
+    ]
+    s = demo_gen.summarize_selection(bases)
+    baseline, spike = demo_gen.infer_unusual_baseline_spike(bases)
+    combined = {
+        "transaction_date": s["last_date"], "card_no": "DEMO-1",
+        "description": "URBAN DEPOT", "category": "Shopping", "debit": baseline,
+    }
+    rows = demo_gen.gen_unusual_amount(
+        combined, baseline=baseline, spike_amount=spike, anonymize=False
+    )
+    demo_gen.write_demo_rows(rows, demo_db)
+
+    conn = _open(demo_db)
+    cands = find_unusual_amount_candidates(conn)
+    conn.close()
+    assert cands, "expected an unusual-amount candidate"
+    flagged = max(cands, key=lambda c: c["z_score"])
+    assert flagged["z_score"] >= 2.0
+    assert flagged["transaction"]["debit"] == pytest.approx(spike)
 
 
 # --- Hash refactor ----------------------------------------------------------
