@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 from .db import get_connection, init_schema
-from .detect import normalize_merchant
+from .detect import normalize_merchant, interval_to_pattern
 from .load import compute_row_hash
 
 _DEFAULT_DEMO_DB = Path(__file__).parent.parent.parent / "demo_data" / "builder.db"
@@ -136,6 +136,45 @@ def _base_fields(base: Mapping, *, anonymize: bool = True) -> dict:
     }
 
 
+def summarize_selection(bases: list[Mapping]) -> dict:
+    """Infer synthetic-series parameters from a set of picked transactions.
+
+    Returns ``count``, ``mean_amount``, ``max_amount``, ``first_date`` and
+    ``last_date`` always; adds ``mean_interval_days`` and ``pattern`` (via the
+    detector's own :func:`interval_to_pattern`) when ≥2 transactions are given.
+    Used by the "combine" workflow to infer a subscription's cadence/amount.
+    """
+    amounts = [float(b["debit"]) for b in bases]
+    dates = sorted(_to_date(b["transaction_date"]) for b in bases)
+    out = {
+        "count": len(bases),
+        "mean_amount": round(sum(amounts) / len(amounts), 2),
+        "max_amount": round(max(amounts), 2),
+        "first_date": dates[0],
+        "last_date": dates[-1],
+    }
+    if len(dates) >= 2:
+        intervals = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
+        mean_interval = sum(intervals) / len(intervals)
+        out["mean_interval_days"] = round(mean_interval, 1)
+        out["pattern"] = interval_to_pattern(mean_interval)
+    return out
+
+
+def infer_unusual_baseline_spike(bases: list[Mapping]) -> tuple[float, float]:
+    """Infer an unusual-amount (baseline, spike) pair from picked transactions.
+
+    The largest selected charge is treated as the anomaly (spike); the baseline
+    is the mean of the remaining charges. With a single transaction there's no
+    "rest", so the baseline falls back to ``spike / 3``.
+    """
+    amounts = sorted(float(b["debit"]) for b in bases)
+    spike = amounts[-1]
+    rest = amounts[:-1]
+    baseline = sum(rest) / len(rest) if rest else spike / 3
+    return round(baseline, 2), round(spike, 2)
+
+
 def gen_duplicate(
     base: Mapping,
     *,
@@ -170,6 +209,7 @@ def gen_unusual_amount(
     history: int = 8,
     baseline: float | None = None,
     multiplier: float = 3.0,
+    spike_amount: float | None = None,
     spread: float = 0.05,
     anonymize: bool = True,
 ) -> list[dict]:
@@ -177,13 +217,16 @@ def gen_unusual_amount(
 
     `history` normal charges sit at ``baseline`` (defaults to the base amount)
     with a tiny deterministic spread, spaced at *irregular* intervals leading up
-    to the base date; a final charge at ``baseline * multiplier`` is the anomaly.
+    to the base date. The final (anomaly) charge is ``spike_amount`` when given
+    (e.g. the largest real charge from a combined selection), otherwise
+    ``baseline * multiplier``.
 
     The irregular spacing is deliberate: evenly-spaced history would also look
     like a subscription and co-fire that detector, muddying a single-alert demo.
     """
     b = _base_fields(base, anonymize=anonymize)
     base_amt = float(baseline) if baseline is not None else b["debit"]
+    spike_amt = float(spike_amount) if spike_amount is not None else base_amt * multiplier
     # Irregular gaps (days) break any clock-like cadence so the subscription
     # detector's interval CV stays above its 0.3 threshold.
     _GAPS = [5, 11, 4, 9, 6, 12, 3, 10]
@@ -214,7 +257,7 @@ def gen_unusual_amount(
         card_no=b["card_no"],
         description=b["description"],
         category=b["category"],
-        debit=base_amt * multiplier,
+        debit=spike_amt,
         file_row=file_row,
     ))
     return rows
