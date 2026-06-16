@@ -175,6 +175,30 @@ def infer_unusual_baseline_spike(bases: list[Mapping]) -> tuple[float, float]:
     return round(baseline, 2), round(spike, 2)
 
 
+def gen_passthrough(base: Mapping, *, anonymize: bool = True) -> list[dict]:
+    """Return the base transaction as a single anonymized row, otherwise unchanged.
+
+    Preserves the real date, posted date, amount, category and credit — only the
+    card number and merchant are anonymized. Used to seed realistic *background*
+    transactions into the demo dataset without generating any alert pattern.
+    """
+    b = _base_fields(base, anonymize=anonymize)
+    posted = base.get("posted_date")
+    posted_date = _to_date(posted) if posted is not None and not pd.isna(posted) else None
+    credit = base.get("credit")
+    credit_val = None if credit is None or pd.isna(credit) else float(credit)
+    return [make_row(
+        transaction_date=b["transaction_date"],
+        posted_date=posted_date,
+        card_no=b["card_no"],
+        description=b["description"],
+        category=b["category"],
+        debit=b["debit"],
+        credit=credit_val,
+        file_row=0,
+    )]
+
+
 def gen_duplicate(
     base: Mapping,
     *,
