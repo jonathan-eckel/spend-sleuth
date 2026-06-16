@@ -72,6 +72,49 @@ def test_anonymize_merchant_collapses_store_number_variants():
         demo_gen.anonymize_merchant("TRADER JOE'S #99")
 
 
+def test_gen_passthrough_anonymizes_identity_and_preserves_the_rest():
+    base = {
+        "transaction_date": date(2025, 6, 1),
+        "posted_date": date(2025, 6, 3),
+        "card_no": "1234",
+        "description": "TRADER JOE'S #142",
+        "category": "Groceries",
+        "debit": 47.82,
+        "credit": None,
+    }
+    rows = demo_gen.gen_passthrough(base)
+    assert len(rows) == 1
+    r = rows[0]
+    # Identity anonymized...
+    assert r["card_no"] == demo_gen.anonymize_card("1234")
+    assert r["description"] == demo_gen.anonymize_merchant("TRADER JOE'S #142")
+    # ...everything else preserved.
+    assert r["transaction_date"] == date(2025, 6, 1)
+    assert r["posted_date"] == date(2025, 6, 3)
+    assert r["category"] == "Groceries"
+    assert r["debit"] == pytest.approx(47.82)
+
+
+def test_gen_passthrough_does_not_trip_detectors(demo_db):
+    # Distinct one-off records should not produce any alert.
+    bases = [
+        {"transaction_date": date(2025, 5, 1), "card_no": "1234",
+         "description": "CORNER CAFE", "category": "Dining", "debit": 8.50},
+        {"transaction_date": date(2025, 5, 9), "card_no": "1234",
+         "description": "BOOK SHOP", "category": "Shopping", "debit": 24.00},
+    ]
+    rows = []
+    for b in bases:
+        rows += demo_gen.gen_passthrough(b)
+    assert demo_gen.write_demo_rows(rows, demo_db) == 2
+
+    conn = _open(demo_db)
+    assert find_duplicate_candidates(conn) == []
+    assert find_subscription_candidates(conn) == []
+    assert find_unusual_amount_candidates(conn) == []
+    conn.close()
+
+
 def test_generators_anonymize_by_default():
     rows = demo_gen.gen_duplicate(BASE)
     assert all(r["card_no"] == demo_gen.anonymize_card(BASE["card_no"]) for r in rows)
