@@ -145,26 +145,30 @@ if not selected_rows:
 
 bases = [picks.iloc[i].to_dict() for i in selected_rows]
 
-# --- Step 2: alert type ---
-st.subheader("2. Choose alert type")
+# --- Step 2: what to build ---
+st.subheader("2. Choose what to build")
 alert_type = st.radio(
-    "Alert type",
-    ["Duplicate charge", "Unusual amount", "Forgotten subscription"],
+    "Output type",
+    ["Anonymize only", "Duplicate charge", "Unusual amount", "Forgotten subscription"],
     horizontal=True,
     help=(
-        "Duplicate clones each selected charge. Unusual amount and Subscription "
-        "combine the whole selection into one inferred synthetic series."
+        "Anonymize only saves each selected record as-is (no alert). Duplicate "
+        "clones each selected charge. Unusual amount and Subscription combine "
+        "the whole selection into one inferred synthetic series."
     ),
 )
 combine = alert_type in ("Unusual amount", "Forgotten subscription")
+passthrough = alert_type == "Anonymize only"
 
 # --- Step 3: anonymize ---
 st.subheader("3. Anonymize")
 
 if not combine:
-    # Duplicate: one editable identity per distinct (card, merchant) among picks.
+    # Duplicate / Anonymize-only: one editable identity per distinct (card,
+    # merchant) among the picks.
+    _action = "saved as-is" if passthrough else "cloned into a duplicate"
     st.caption(
-        f"{len(bases)} transaction(s) selected — each is cloned into a duplicate. "
+        f"{len(bases)} transaction(s) selected — each is {_action}. "
         "Each distinct real merchant/card below is replaced on its generated rows."
     )
     _seen: dict[tuple[str, str], dict] = {}
@@ -231,7 +235,19 @@ st.subheader("4. Shape into a stronger alert")
 
 generated: list[dict] = []
 
-if alert_type == "Duplicate charge":
+if alert_type == "Anonymize only":
+    st.caption(
+        "No shaping — each selected record is saved as-is, with only the card "
+        "number and merchant anonymized. Useful for seeding realistic background data."
+    )
+    for b in bases:
+        norm = demo_gen.normalize_merchant(b["description"])
+        fake_card, fake_merchant = anon_map[(str(b["card_no"]), norm)]
+        anon_base = {**b, "card_no": fake_card, "description": fake_merchant}
+        generated += demo_gen.gen_passthrough(anon_base, anonymize=False)
+    st.caption(f"{len(generated)} record(s) ready from {len(bases)} selection(s).")
+
+elif alert_type == "Duplicate charge":
     c1, c2, c3 = st.columns(3)
     copies = c1.number_input("Copies", min_value=2, max_value=10, value=2)
     days_apart = c2.number_input("Days apart", min_value=0, max_value=7, value=0)
