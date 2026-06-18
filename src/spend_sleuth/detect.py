@@ -55,6 +55,26 @@ JOIN scoped b
 """
 
 
+def interval_to_pattern(mean_interval_days: float) -> str:
+    """Bucket a mean inter-charge interval (days) into a cadence label.
+
+    Thresholds are midpoints between canonical cadences (weekly≈7, biweekly≈14,
+    monthly≈30, quarterly≈90, semi-annual≈180, annual≈365). Shared with the demo
+    generator so an inferred cadence matches what this module would classify.
+    """
+    if mean_interval_days < 10:
+        return "weekly"
+    if mean_interval_days < 22:
+        return "biweekly"
+    if mean_interval_days < 60:
+        return "monthly"
+    if mean_interval_days < 135:
+        return "quarterly"
+    if mean_interval_days < 270:
+        return "semi-annual"
+    return "annual"
+
+
 def normalize_merchant(description: str) -> str:
     s = description.strip().upper()
     for pat in _PREFIX_PATTERNS:
@@ -427,20 +447,7 @@ def find_subscription_candidates(
         if (dates[-1] - dates[0]).days < mean_interval * 2:
             continue
 
-        # Bucket by mean interval; thresholds are midpoints between canonical cadences
-        # (weekly≈7, biweekly≈14, monthly≈30, quarterly≈90, semi-annual≈180, annual≈365)
-        if mean_interval < 10:
-            pattern = "weekly"
-        elif mean_interval < 22:
-            pattern = "biweekly"
-        elif mean_interval < 60:
-            pattern = "monthly"
-        elif mean_interval < 135:
-            pattern = "quarterly"
-        elif mean_interval < 270:
-            pattern = "semi-annual"
-        else:
-            pattern = "annual"
+        pattern = interval_to_pattern(mean_interval)
 
         results.append({
             "alert_type": "subscription",
